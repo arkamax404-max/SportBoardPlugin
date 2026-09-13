@@ -1,0 +1,80 @@
+# OpenSpec project configuration — SportBoardPlugin
+# Maintained by the SDD phases. Written by sdd-init on 2026-09-13.
+schema: spec-driven
+
+project: sportboardplugin
+artifact_store: openspec
+persistence: openspec
+execution_mode: auto
+delivery_strategy: ask-on-risk
+review_budget_lines: 400
+chain_strategy: deferred
+strict_tdd: false
+
+context: |
+  Workspace: SportBoardPlugin — a live sports score plugin for the Ulanzi D200 keypad (UlanziStudio JavaScript plugin).
+  Product: reads TheSportsDB free/development access; starts with configurable football (soccer); first slice is a live-score view for one selected event.
+  Current repository state: empty apart from this OpenSpec bootstrap; no implementation stack, manifest, or test runner has been detected.
+  Planned stack from inspected sibling D200 plugins (FlightInfoPlugin, SimpleCountDownPlugIn): Node >= 20, plain JavaScript, CommonJS plugin runtime, esbuild/copy bundling into com.ulanzi.<id>.ulanziPlugin/dist/, zip packaging imported by UlanziStudio.
+  Planned test convention: node:test + node:assert/strict under test/*.test.js, plus npm run check for manifest and syntax validation.
+  D200 rendering constraint observed in siblings: host-rendered text metadata is unreliable, so dynamic content is produced as generated base64 SVG images.
+  External API facts (TheSportsDB endpoints, response shapes, tier/rate limits, polling cadence) MUST be evidenced in research before design; never invent SDK or API fields.
+  Secrets rule: user-supplied API keys never appear in source, defaults, docs, logs, or error/UI text; masked Property Inspector field only.
+  Generated technical artifacts are written in English.
+
+projects: []
+
+testing:
+  strict_tdd: false
+  reason: >-
+    Zero in-scope project roots were discovered and no explicit workspace-level
+    test command exists, so strict TDD fails closed. Detection date 2026-09-13.
+  workspace_test_command: ""
+  projects: []
+  setup_gate:
+    promotes_to: strict_tdd true
+    conditions:
+      - Create package.json at the workspace root with engines.node >= 20.
+      - Provide one workspace-level test command (npm test running node --test over test/*.test.js) that covers every discovered project.
+      - Provide npm run check (manifest.json required fields + node --check over src and property-inspector JavaScript).
+      - Provide npm run build producing the com.ulanzi.<id>.ulanziPlugin package output.
+  detected_from_reference_repos:
+    - path: /mnt/d/Desarrollo/FlightInfoPlugin
+      test_command: "npm test -> node --test test/*.test.js"
+      check_command: "npm run check -> node scripts/check.mjs"
+    - path: /mnt/d/Desarrollo/SimpleCountDownPlugIn
+      test_command: "npm test -> node --test"
+      build_command: "npm run build -> esbuild --bundle --format=cjs --target=node20.12"
+
+rules:
+  proposal:
+    - Include a rollback plan for risky changes.
+    - State explicitly which external TheSportsDB or Ulanzi host behaviors are assumed and how each will be evidenced.
+    - Keep the first slice to one selected event in one live-score view; defer multi-event and multi-sport scope to later changes.
+  specs:
+    - Use Given/When/Then for scenarios.
+    - Use RFC 2119 keywords (MUST, SHALL, SHOULD, MAY).
+    - Specify unavailable, loading, and stale-data states for every network-backed requirement.
+    - Keep sport selection configurable with football as the shipped default.
+  design:
+    - Include sequence diagrams for polling and host/Property Inspector interactions.
+    - Document architecture decisions with rationale and cited evidence from inspected D200 plugins or TheSportsDB responses.
+    - Define the provider boundary that normalizes TheSportsDB payloads before presentation.
+  tasks:
+    - Group by phase and use hierarchical numbering.
+    - Keep tasks completable in one session.
+    - Pair each implementation task with its test task; no task may leave the repo without a runnable check.
+  apply:
+    guidelines:
+      - Follow detected project patterns once implementation exists.
+      - Verify external API and host SDK behavior against real evidence before use; do not guess fields.
+      - Never commit API keys, and do not log request URLs containing credentials.
+      - Respect TheSportsDB free-tier politeness: bounded polling, no concurrent refresh for the same key, manual refresh always allowed.
+    tdd: false
+    test_command: ""
+  verify:
+    test_command: ""
+    build_command: ""
+    coverage_threshold: 0
+  archive:
+    - Warn before merging destructive deltas.
