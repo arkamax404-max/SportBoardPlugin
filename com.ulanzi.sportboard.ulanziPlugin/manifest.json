@@ -1,0 +1,23 @@
+{
+  "Author": "SportBoardPlugin Contributors",
+  "Name": "Sport Board",
+  "Icon": "assets/plugin.png",
+  "Version": "0.1.0",
+  "CodePath": "dist/main.js",
+  "Type": "JavaScript",
+  "UUID": "com.ulanzi.ulanzistudio.sportboard",
+  "Actions": [
+    {
+      "Name": "Sport Board Status",
+      "Icon": "assets/action.png",
+      "UUID": "com.ulanzi.ulanzistudio.sportboard.status",
+      "States": [
+        { "Name": "Ready", "Image": "assets/ready.png" },
+        { "Name": "Selected", "Image": "assets/selected.png" }
+      ],
+      "DisableAutomaticStates": true,
+      "Controllers": ["Keypad"],
+      "Devices": ["D200"]
+    }
+  ]
+}

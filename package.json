@@ -1,0 +1,13 @@
+{
+  "name": "sportboard-plugin",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Static Sport Board action package for the Ulanzi D200",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "check": "node scripts/check.mjs",
+    "test": "node --test test/*.test.js"
+  }
+}
