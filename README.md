@@ -9,6 +9,8 @@ An unofficial Ulanzi Studio plugin for the **Ulanzi D200** that displays the foo
 - The nearest finished or upcoming match is selected automatically; no date input is required.
 - Match-day updates every two minutes while the match is not in a terminal state.
 - Home and away crests, team names, score or kickoff time, and match date rendered on the key.
+- A static red `LIVE` badge for matches in play or paused at half-time.
+- A short score-change alert played by the computer, not by the D200.
 - Persistent selector cache with explicit on-demand refresh.
 - Durable per-key settings through the Ulanzi Studio settings API.
 - Zero runtime npm dependencies.
@@ -40,6 +42,8 @@ Typical Windows plugin directory:
 The plugin requests the selected team's fixtures within a bounded window around the current date and chooses the kickoff with the smallest absolute distance from now. A future fixture wins an exact tie.
 
 Automatic polling runs every two minutes only when the chosen fixture is scheduled for the current local calendar day and its status is not terminal. Future-day, finished, cancelled, postponed, suspended, and awarded fixtures are not polled. Pressing the key still triggers an immediate manual refresh.
+
+The first score observed for each key and match establishes a silent baseline. Later home or away score changes for that same live match play one short computer-audio alert, including score corrections. Changing the selected team, competition, or match establishes a new silent baseline. Audio playback failure does not interrupt key updates or polling.
 
 ## Privacy and security
 

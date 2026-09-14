@@ -12,7 +12,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 export const PLUGIN_FOLDER = "com.ulanzi.sportboard.ulanziPlugin";
-export const EXPECTED_RUNTIME_FILES = ["action-runtime.js", "catalog-cache.js", "host-client.js", "main.js", "score-image.js", "score-service.js", "team-catalog.js", "team-runtime.js"];
+export const EXPECTED_RUNTIME_FILES = ["action-runtime.js", "catalog-cache.js", "host-client.js", "main.js", "score-alert.js", "score-image.js", "score-service.js", "team-catalog.js", "team-runtime.js"];
 
 function fail(message) {
   throw new Error(`build: ${message}`);

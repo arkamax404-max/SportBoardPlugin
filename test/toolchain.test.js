@@ -27,6 +27,25 @@ const PLUGIN_UUID = "com.ulanzi.ulanzistudio.sportboard";
 const ACTION_UUID = `${PLUGIN_UUID}.status`;
 const ASSET_NAMES = ["plugin.png", "action.png", "ready.png", "selected.png"];
 const BANNER_NAME = "banner.png";
+const SCORE_SOUND_NAME = "score-change.wav";
+
+function validScoreSound() {
+  const wav = Buffer.alloc(2044);
+  wav.write("RIFF", 0, "ascii");
+  wav.writeUInt32LE(wav.length - 8, 4);
+  wav.write("WAVE", 8, "ascii");
+  wav.write("fmt ", 12, "ascii");
+  wav.writeUInt32LE(16, 16);
+  wav.writeUInt16LE(1, 20);
+  wav.writeUInt16LE(1, 22);
+  wav.writeUInt32LE(44100, 24);
+  wav.writeUInt32LE(88200, 28);
+  wav.writeUInt16LE(2, 32);
+  wav.writeUInt16LE(16, 34);
+  wav.write("data", 36, "ascii");
+  wav.writeUInt32LE(wav.length - 44, 40);
+  return wav;
+}
 
 function baseManifest() {
   return {
@@ -34,12 +53,12 @@ function baseManifest() {
     Name: "Sport Board",
     Description: "Football match scores and fixtures for your Ulanzi D200.",
     Detail:
-      "Sport Board displays the football match nearest to the current time for a team assigned to each Ulanzi D200 key. Select a competition and team, then view home and away crests, team names, kickoff time, score, and match date directly on the device. Match-day information refreshes every two minutes until the fixture reaches a terminal state, and pressing the key triggers a manual refresh. A football-data.org API token is required, and competition and fixture availability depends on the account plan.",
+      "Sport Board displays the football match nearest to the current time for a team assigned to each Ulanzi D200 key. Select a competition and team, then view home and away crests, team names, kickoff time, score, match date, and a LIVE badge directly on the device. Match-day information refreshes every two minutes until the fixture reaches a terminal state, and pressing the key triggers a manual refresh. Score changes during live play produce a short alert on the computer. A football-data.org API token is required, and competition and fixture availability depends on the account plan.",
     Category: "Sports",
     Icon: "assets/plugin.png",
     CategoryIcon: "assets/plugin.png",
     Banner: ["assets/banners/banner.png"],
-    Version: "0.1.0",
+    Version: "0.14.0",
     CodePath: "dist/main.js",
     Type: "JavaScript",
     UUID: PLUGIN_UUID,
@@ -92,12 +111,14 @@ function baseFs() {
   return memoryFs(
     {
       "": ["manifest.json", "assets"],
-      assets: [...ASSET_NAMES, "banners"],
+      assets: [...ASSET_NAMES, "banners", "sounds"],
       "assets/banners": [BANNER_NAME],
+      "assets/sounds": [SCORE_SOUND_NAME],
     },
     {
       ...Object.fromEntries(ASSET_NAMES.map((name) => [`assets/${name}`, PNG_SIGNATURE])),
       [`assets/banners/${BANNER_NAME}`]: PNG_SIGNATURE,
+      [`assets/sounds/${SCORE_SOUND_NAME}`]: validScoreSound(),
     },
   );
 }
@@ -210,6 +231,13 @@ test("package metadata gate: version drift, engines, scripts and dependency sets
   assert.deepEqual(rulesOf(validatePackageJson(withDependency, manifest)), ["package.dependencies"]);
 });
 
+test("release metadata is pinned to version 0.14.0", () => {
+  const packageJson = JSON.parse(repoRead("package.json"));
+  const manifest = JSON.parse(repoRead("com.ulanzi.sportboard.ulanziPlugin/manifest.json"));
+  assert.equal(packageJson.version, "0.14.0");
+  assert.equal(manifest.Version, "0.14.0");
+});
+
 test("exactly one D200 keypad action is required", async () => {
   const { validateManifest } = await loadCheck();
 
@@ -310,8 +338,23 @@ test("no property-inspector directory may exist in the package", async () => {
   const { validatePackageStructure } = await loadCheck();
   assert.deepEqual(rulesOf(validatePackageStructure(baseFs())), []);
 
-  const withInspector = memoryFs({ "": ["manifest.json", "assets", "property-inspector"] }, {});
+  const withInspector = memoryFs(
+    { "": ["manifest.json", "assets", "property-inspector"], "assets/sounds": [SCORE_SOUND_NAME] },
+    { [`assets/sounds/${SCORE_SOUND_NAME}`]: validScoreSound() },
+  );
   assert.deepEqual(rulesOf(validatePackageStructure(withInspector)), []);
+});
+
+test("package structure requires a bounded mono PCM score alert WAV", async () => {
+  const { validatePackageStructure } = await loadCheck();
+  const missing = memoryFs({ "": ["manifest.json", "assets"], assets: [] }, {});
+  assert.deepEqual(rulesOf(validatePackageStructure(missing)), ["asset.missing"]);
+
+  const malformed = memoryFs(
+    { "assets/sounds": [SCORE_SOUND_NAME] },
+    { [`assets/sounds/${SCORE_SOUND_NAME}`]: Buffer.alloc(44) },
+  );
+  assert.deepEqual(rulesOf(validatePackageStructure(malformed)), ["asset.wav-format"]);
 });
 
 test("the committed repository tree passes its own check gate", async () => {
@@ -393,7 +436,7 @@ rm: (p) => {
   };
 }
 
-test("build stages exactly the three runtime files byte-for-byte and drops stale dist entries", async () => {
+test("build stages exactly the runtime files byte-for-byte and drops stale dist entries", async () => {
   const { buildDist, EXPECTED_RUNTIME_FILES } = await loadBuild();
   const sources = {
 "src/action-runtime.js": "action runtime bytes",
@@ -402,6 +445,7 @@ test("build stages exactly the three runtime files byte-for-byte and drops stale
 "src/team-catalog.js": "team catalog bytes",
 "src/host-client.js": "host client bytes",
 "src/main.js": "main bytes",
+"src/score-alert.js": "score alert bytes",
 "src/score-service.js": "score service bytes",
 "src/score-image.js": "score image bytes",
   };
@@ -441,6 +485,7 @@ test("build removes its staging directory on a mid-copy failure and leaves dist 
 "src/team-runtime.js": "b",
 "src/host-client.js": "c",
 "src/main.js": "d",
+"src/score-alert.js": "i",
 "src/score-service.js": "e",
 "src/score-image.js": "f",
 "src/team-catalog.js": "g",
@@ -474,6 +519,7 @@ function fixturePackage() {
 "pkg/assets/action.png": "action png bytes",
 "pkg/assets/ready.png": "ready png bytes",
 "pkg/assets/selected.png": "selected png bytes",
+"pkg/assets/sounds/score-change.wav": validScoreSound(),
 "pkg/dist/action-runtime.js": "a",
 "pkg/dist/host-client.js": "b",
 "pkg/dist/main.js": "c",
@@ -491,11 +537,12 @@ test("collectEntries yields sorted prefixed names with manifest at the plugin-fo
   const { collectEntries, PLUGIN_FOLDER } = await loadPackage();
   const entries = collectEntries({ pluginDir: "pkg", fs: memoryTree(fixturePackage()) });
   const names = entries.map((entry) => entry.name);
-  assert.equal(names.length, 9);
+  assert.equal(names.length, 10);
   assert.ok(names.every((name) => name.startsWith(`${PLUGIN_FOLDER}/`)));
   assert.deepEqual(names, [...names].sort());
   assert.equal(names[0], `${PLUGIN_FOLDER}/assets/action.png`);
   assert.ok(names.includes(`${PLUGIN_FOLDER}/manifest.json`), "manifest sits at the plugin-folder root");
+  assert.ok(names.includes(`${PLUGIN_FOLDER}/assets/sounds/score-change.wav`), "score alert WAV is packaged");
   const manifest = entries.find((entry) => entry.name === `${PLUGIN_FOLDER}/manifest.json`);
   assert.ok(manifest.data.equals(Buffer.from("{}\n")), "entry bytes are copied unmodified");
 });
@@ -608,6 +655,8 @@ const README_ANCHORS = [
   "Windows 10 or later",
   "macOS 12 or later",
   "pending physical validation",
+  "LIVE",
+  "played by the computer",
 ];
 
 test("README documents the public plugin, installation, security and verification", () => {

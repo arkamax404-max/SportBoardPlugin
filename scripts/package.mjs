@@ -199,6 +199,9 @@ export function main() {
     if (!entries.some((entry) => entry.name === `${PLUGIN_FOLDER}/manifest.json`)) {
       throw new Error(`${PLUGIN_FOLDER}/manifest.json is missing from the package folder root`);
     }
+    if (!entries.some((entry) => entry.name === `${PLUGIN_FOLDER}/assets/sounds/score-change.wav`)) {
+      throw new Error(`${PLUGIN_FOLDER}/assets/sounds/score-change.wav is missing from the package`);
+    }
     const zip = createZip(entries);
     verifyZipLayout(zip, entries.map((entry) => entry.name));
     const target = join(repoRoot, "package", `${PLUGIN_FOLDER}.zip`);

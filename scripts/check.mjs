@@ -38,7 +38,7 @@ const EXPECTED_STATE_NAMES = ["Ready", "Selected"];
 const EXPECTED_PUBLICATION_METADATA = {
   Description: "Football match scores and fixtures for your Ulanzi D200.",
   Detail:
-    "Sport Board displays the football match nearest to the current time for a team assigned to each Ulanzi D200 key. Select a competition and team, then view home and away crests, team names, kickoff time, score, and match date directly on the device. Match-day information refreshes every two minutes until the fixture reaches a terminal state, and pressing the key triggers a manual refresh. A football-data.org API token is required, and competition and fixture availability depends on the account plan.",
+    "Sport Board displays the football match nearest to the current time for a team assigned to each Ulanzi D200 key. Select a competition and team, then view home and away crests, team names, kickoff time, score, match date, and a LIVE badge directly on the device. Match-day information refreshes every two minutes until the fixture reaches a terminal state, and pressing the key triggers a manual refresh. Score changes during live play produce a short alert on the computer. A football-data.org API token is required, and competition and fixture availability depends on the account plan.",
   Category: "Sports",
   CategoryIcon: "assets/plugin.png",
   Banner: ["assets/banners/banner.png"],
@@ -58,6 +58,8 @@ const VALIDATED_OPTIONAL_SCRIPTS = {
   package: "npm run check && npm test && npm run build && node scripts/package.mjs",
 };
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+const SCORE_SOUND_PATH = "assets/sounds/score-change.wav";
+const MAX_SCORE_SOUND_BYTES = 100000;
 
 function defect(path, rule, message) {
   return { path, rule, message };
@@ -299,8 +301,29 @@ function safeRelative(path) {
 }
 
 export function validatePackageStructure(fs) {
-  const entries = fs.listDir("") ?? [];
-  return [];
+  const defects = [];
+  const sounds = fs.listDir("assets/sounds");
+  if (sounds === null || !sounds.includes("score-change.wav")) {
+    defects.push(defect(SCORE_SOUND_PATH, "asset.missing", "score alert WAV does not exist"));
+    return defects;
+  }
+  const wav = fs.readBytes(SCORE_SOUND_PATH, MAX_SCORE_SOUND_BYTES + 1);
+  if (wav === null || wav.length < 44 || wav.length > MAX_SCORE_SOUND_BYTES) {
+    defects.push(defect(SCORE_SOUND_PATH, "asset.wav-size", "score alert WAV must be between 44 and 100000 bytes"));
+    return defects;
+  }
+  const validHeader = wav.toString("ascii", 0, 4) === "RIFF"
+    && wav.toString("ascii", 8, 12) === "WAVE"
+    && wav.toString("ascii", 12, 16) === "fmt "
+    && wav.toString("ascii", 36, 40) === "data"
+    && wav.readUInt32LE(4) === wav.length - 8
+    && wav.readUInt32LE(16) === 16
+    && wav.readUInt16LE(20) === 1
+    && wav.readUInt16LE(22) === 1
+    && wav.readUInt16LE(34) === 16
+    && wav.readUInt32LE(40) === wav.length - 44;
+  if (!validHeader) defects.push(defect(SCORE_SOUND_PATH, "asset.wav-format", "score alert must be mono 16-bit PCM RIFF/WAVE"));
+  return defects;
 }
 
 const repoRoot = fileURLToPath(new URL("../", import.meta.url));

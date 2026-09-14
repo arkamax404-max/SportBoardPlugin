@@ -16,6 +16,7 @@ const { CatalogCache } = require("./catalog-cache.js");
 const nodeFs = require("node:fs");
 const nodePath = require("node:path");
 const { FootballDataScoreProvider, ScoreService } = require("./score-service.js");
+const { createScoreAlertPlayer } = require("./score-alert.js");
 
 // Compile-time identity (DA1/DA2): one atomic change updates these together
 // with the manifest, package metadata, checks and tests.
@@ -48,7 +49,7 @@ function writeStderr(line) {
 // `cachePath` exists so tests can point the cache at a scratch directory: the default
 // resolves to <pluginRoot>/catalog-cache.json, which is the plugin folder when
 // dist/main.js runs and would otherwise be the source tree under test.
-function start({ argv = process.argv, connect, randomBytes, stderr = writeStderr, fetch = globalThis.fetch, cachePath } = {}) {
+function start({ argv = process.argv, connect, randomBytes, stderr = writeStderr, fetch = globalThis.fetch, cachePath, spawn, platform, scoreSoundPath } = {}) {
   let endpoint;
   try {
     endpoint = parseLaunchArgs(argv);
@@ -59,7 +60,8 @@ function start({ argv = process.argv, connect, randomBytes, stderr = writeStderr
   const client = new HostClient({ pluginUuid: PLUGIN_UUID, connect, randomBytes });
   const runtime = new ActionRuntime({ host: client, actionUuid: ACTION_UUID, stateCount: STATE_COUNT });
   const scores = new ScoreService({ provider: new FootballDataScoreProvider({ fetch }) });
-  const teams = new TeamRuntime({ host: client, service: scores });
+  const scoreAlert = createScoreAlertPlayer({ spawn, platform, soundPath: scoreSoundPath });
+  const teams = new TeamRuntime({ host: client, service: scores, alert: scoreAlert.play });
   const catalog = new TeamCatalog({ service: scores, host: client, cache: createCatalogCache(cachePath) });
   // A plugin restart reaches the service as an `add` carrying the saved settings, so
   // this is where the key view and both option lists are restored. The catalog serves
@@ -102,6 +104,7 @@ function start({ argv = process.argv, connect, randomBytes, stderr = writeStderr
   const dispose = () => {
     runtime.dispose(); // clear static in-memory state; nothing is persisted
     teams.dispose(); // cancel every per-key match-day poll timer
+    scoreAlert.dispose(); // terminate any host-computer sound still playing
     client.dispose(); // destroy the one socket; no reconnect ever follows
   };
   process.once("SIGINT", dispose);
