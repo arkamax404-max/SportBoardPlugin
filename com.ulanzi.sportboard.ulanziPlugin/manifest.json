@@ -2,7 +2,7 @@
   "Author": "SportBoardPlugin Contributors",
   "Name": "Sport Board",
   "Icon": "assets/plugin.png",
-  "Version": "0.1.0",
+  "Version": "0.13.0",
   "CodePath": "dist/main.js",
   "Type": "JavaScript",
   "UUID": "com.ulanzi.ulanzistudio.sportboard",
@@ -10,6 +10,7 @@
     {
       "Name": "Sport Board Status",
       "Icon": "assets/action.png",
+      "PropertyInspectorPath": "property-inspector/inspector.html",
       "UUID": "com.ulanzi.ulanzistudio.sportboard.status",
       "States": [
         { "Name": "Ready", "Image": "assets/ready.png" },

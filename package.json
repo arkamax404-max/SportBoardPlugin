@@ -1,13 +1,24 @@
 {
   "name": "sportboard-plugin",
-  "version": "0.1.0",
+  "version": "0.13.0",
   "private": true,
-  "description": "Static Sport Board action package for the Ulanzi D200",
+  "description": "Football match score and fixture keys for the Ulanzi D200",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/arkamax404-max/SportBoardPlugin.git"
+  },
+  "homepage": "https://github.com/arkamax404-max/SportBoardPlugin#readme",
+  "bugs": {
+    "url": "https://github.com/arkamax404-max/SportBoardPlugin/issues"
+  },
   "engines": {
     "node": ">=20"
   },
   "scripts": {
     "check": "node scripts/check.mjs",
-    "test": "node --test test/*.test.js"
+    "test": "node --test test/*.test.js",
+    "build": "node scripts/build.mjs",
+    "package": "npm run check && npm test && npm run build && node scripts/package.mjs"
   }
 }

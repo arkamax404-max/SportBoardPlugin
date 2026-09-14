@@ -1,0 +1,193 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Sport Board</title>
+  <link rel="stylesheet" href="../libs/css/uspi.css">
+</head>
+<body>
+  <div class="uspi-wrapper">
+    <form id="property-inspector">
+      <div class="uspi-item">
+        <div class="uspi-item-label">football-data.org token</div>
+        <input class="uspi-item-value" id="token" name="token" type="password" autocomplete="off" placeholder="API token">
+      </div>
+      <div class="uspi-item">
+        <div class="uspi-item-label">Competition</div>
+        <select class="uspi-item-value" id="competition" name="competition">
+          <option value="PD">Primera Division</option>
+        </select>
+      </div>
+      <div class="uspi-item">
+        <div class="uspi-item-label">Team</div>
+        <select class="uspi-item-value" id="teamId" name="teamId">
+          <option value="90">Real Betis</option>
+        </select>
+      </div>
+      <div class="uspi-item">
+        <div class="uspi-item-label">Lists</div>
+        <button class="uspi-item-value" id="refresh" type="button">Refresh competitions and teams</button>
+      </div>
+      <div class="uspi-item">
+        <div class="uspi-item-value" id="selector-status">Cached lists are used until you refresh.</div>
+      </div>
+    </form>
+  </div>
+  <script src="../libs/js/constants.js"></script>
+  <script src="../libs/js/eventEmitter.js"></script>
+  <script src="../libs/js/timers.js"></script>
+  <script src="../libs/js/utils.js"></script>
+  <script src="../libs/js/ulanziApi.js"></script>
+  <script>
+    "use strict";
+
+    // The option lists are fetched by the plugin's main service, not here: this page
+    // runs in the host's browser context and the provider only allows the
+    // http://localhost origin, so a direct call is not dependable. The service owns
+    // the token, keeps the cached lists, and answers with a
+    // sendToPropertyInspector payload.
+    const form = document.querySelector("#property-inspector");
+    const tokenInput = document.querySelector("#token");
+    const competitionSelect = document.querySelector("#competition");
+    const teamSelect = document.querySelector("#teamId");
+    const refreshButton = document.querySelector("#refresh");
+    const status = document.querySelector("#selector-status");
+
+    // The saved selection is remembered separately from the <select> element,
+    // because the saved team may not exist as an option yet: assigning a missing
+    // value leaves the element empty, so the selection would be silently lost when
+    // the list arrives later.
+    let desired = { competition: "", teamId: "" };
+
+    // Rebuild a list and restore the wanted value if the entity still exists;
+    // otherwise the previous element value, and finally the first option.
+    function replaceOptions(select, items, toValue, toLabel, wanted) {
+      const previous = select.value;
+      select.replaceChildren(...items.map((item) => {
+        const option = document.createElement("option");
+        option.value = toValue(item);
+        option.textContent = toLabel(item);
+        return option;
+      }));
+      for (const candidate of [wanted, previous]) {
+        if (candidate && items.some((item) => toValue(item) === candidate)) {
+          select.value = candidate;
+          return;
+        }
+      }
+    }
+
+    function currentSelection() {
+      const option = teamSelect.selectedOptions[0];
+      return {
+        ...Utils.getFormValue(form),
+        teamLabel: option ? option.textContent.trim() : "",
+      };
+    }
+
+    function publish() {
+      if (!form.reportValidity()) return;
+      // setSettings is the SDK's durable storage route. The older
+      // sendParamFromPlugin channel updates the running service but is not reliably
+      // retained when Studio exits.
+      $UD.setSettings(currentSelection());
+    }
+
+    function applyCompetitions(payload) {
+      if (Array.isArray(payload.competitions) && payload.competitions.length > 0) {
+        replaceOptions(competitionSelect, payload.competitions, (item) => item.code, (item) => item.name, desired.competition);
+        desired.competition = competitionSelect.value;
+        status.textContent = `${payload.competitions.length} competitions`;
+      } else if (payload.error === "competitions unavailable") {
+        status.textContent = "Competitions are unavailable right now; the cached list is still used.";
+      }
+    }
+
+    function applyTeams(payload) {
+      if (payload.error === "token required") {
+        status.textContent = "Enter your token to load the competition and team lists.";
+        return;
+      }
+      if (payload.error === "teams unavailable") {
+        status.textContent = "Teams are unavailable right now; the cached list is still used.";
+        return;
+      }
+      if (Array.isArray(payload.teams) && payload.teams.length > 0) {
+        replaceOptions(teamSelect, payload.teams, (item) => String(item.id), (item) => item.name || String(item.id), desired.teamId);
+        desired.teamId = teamSelect.value;
+        status.textContent = `${payload.teams.length} teams`;
+      }
+    }
+
+    function loadSavedSettings(param) {
+      Utils.setFormValue(param || {}, form);
+      if (param && param.competition) desired.competition = String(param.competition);
+      if (param && param.teamId) desired.teamId = String(param.teamId);
+      // The saved values may not exist as options yet; apply them once the lists
+      // arrive, so the selection survives opening the inspector.
+      if (desired.competition) competitionSelect.value = desired.competition;
+      if (desired.teamId) teamSelect.value = desired.teamId;
+    }
+
+    // Ask the service for the option lists when this page opens. Lists are cached, so
+    // this normally costs no provider request; without it the selectors would stay
+    // empty until the user changed a field.
+    function syncLists() {
+      if (!tokenInput.value) {
+        status.textContent = "Enter your token to load the competition and team lists.";
+        return;
+      }
+      $UD.sendToPlugin({ ...currentSelection(), sync: true });
+    }
+
+    function restoreSettings(message) {
+      // `add` is not replayed reliably when Studio reopens an Inspector. The durable
+      // route is getSettings -> didReceiveSettings; tolerate the payload shapes used
+      // by different Studio releases.
+      const saved = message?.settings ?? message?.param ?? message?.payload?.settings ?? {};
+      loadSavedSettings(saved);
+      syncLists();
+    }
+
+    $UD.onConnected(() => $UD.getSettings());
+    $UD.onDidReceiveSettings(restoreSettings);
+    $UD.onAdd(restoreSettings); // compatibility with hosts that include settings in add
+    $UD.onParamFromApp((message) => loadSavedSettings(message.param));
+    $UD.onSendToPropertyInspector((message) => {
+      applyCompetitions(message.payload || {});
+      applyTeams(message.payload || {});
+    });
+
+    // Changing the competition must reload that competition's teams; the team list is
+    // cleared first so a stale option cannot be submitted under the new competition
+    // while the reload is in flight.
+    competitionSelect.addEventListener("change", () => {
+      desired.competition = competitionSelect.value;
+      desired.teamId = ""; // the team belongs to the previous competition
+      teamSelect.replaceChildren();
+      status.textContent = "Loading teams…";
+      publish();
+    });
+
+    // The refresh is strictly on demand and travels over the transient channel, so
+    // "refresh" can never be saved as a persistent setting that would bypass the
+    // cache on every later load.
+    refreshButton.addEventListener("click", () => {
+      if (!form.reportValidity()) return;
+      status.textContent = "Refreshing competitions and teams…";
+      $UD.sendToPlugin({ ...currentSelection(), refresh: true });
+    });
+
+    // Remember the user's own selections too, so any later list rebuild keeps them.
+    form.addEventListener("change", () => {
+      desired.competition = competitionSelect.value;
+      desired.teamId = teamSelect.value;
+      publish();
+    });
+
+    // Register every listener before opening the socket so a fast host cannot emit
+    // the restoration response before this page is ready to consume it.
+    $UD.connect("com.ulanzi.ulanzistudio.sportboard.status");
+  </script>
+</body>
+</html>

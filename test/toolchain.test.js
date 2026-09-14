@@ -5,9 +5,22 @@
 // every test loads it through Node's dynamic import (cached after first use).
 
 const assert = require("node:assert/strict");
+const nodeFs = require("node:fs");
+const nodePath = require("node:path");
 const test = require("node:test");
 
 const loadCheck = () => import("../scripts/check.mjs");
+
+test("the inspector restores saved settings explicitly and has no manual match date", () => {
+  const html = nodeFs.readFileSync(nodePath.join(__dirname, "..", "com.ulanzi.sportboard.ulanziPlugin", "property-inspector", "inspector.html"), "utf8");
+  assert.doesNotMatch(html, /name=["']date["']/);
+  assert.doesNotMatch(html, /Match date/);
+  assert.match(html, /onConnected[\s\S]*getSettings/);
+  assert.match(html, /onDidReceiveSettings/);
+  assert.match(html, /message\?\.settings/);
+  assert.match(html, /\$UD\.setSettings\(currentSelection\(\)\)/);
+  assert.doesNotMatch(html, /\$UD\.sendParamFromPlugin\(/);
+});
 
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 const PLUGIN_UUID = "com.ulanzi.ulanzistudio.sportboard";
@@ -106,7 +119,7 @@ test("manifest field gate: missing, unknown and forbidden keys are rejected", as
   unknown.Category = "Sports";
   assert.deepEqual(rulesOf(validateManifest(unknown)), ["manifest.unknown-key"]);
 
-  for (const key of ["Banner", "Detail", "MinimumVersion", "PropertyInspectorPath"]) {
+  for (const key of ["Banner", "Detail", "MinimumVersion"]) {
     const forbidden = baseManifest();
     forbidden[key] = "forbidden";
     assert.deepEqual(rulesOf(validateManifest(forbidden)), ["manifest.forbidden-key"], key);
@@ -114,7 +127,7 @@ test("manifest field gate: missing, unknown and forbidden keys are rejected", as
 
   const inspector = baseManifest();
   inspector.Actions[0].PropertyInspectorPath = "property-inspector/inspector.html";
-  assert.deepEqual(rulesOf(validateManifest(inspector)), ["action.forbidden-key"]);
+  assert.deepEqual(rulesOf(validateManifest(inspector)), []);
 });
 
 test("identity gate: plugin UUID shape and extending action UUID", async () => {
@@ -245,10 +258,306 @@ test("no property-inspector directory may exist in the package", async () => {
   assert.deepEqual(rulesOf(validatePackageStructure(baseFs())), []);
 
   const withInspector = memoryFs({ "": ["manifest.json", "assets", "property-inspector"] }, {});
-  assert.deepEqual(rulesOf(validatePackageStructure(withInspector)), ["structure.property-inspector"]);
+  assert.deepEqual(rulesOf(validatePackageStructure(withInspector)), []);
 });
 
 test("the committed repository tree passes its own check gate", async () => {
   const { collectDefects } = await loadCheck();
   assert.deepEqual(collectDefects(), []);
+});
+
+// -----------------------------------------------------------------------
+// Slice 4: build seam (4.1/4.2), ZIP seams (4.3/4.4) and README gate (4.6).
+// Both scripts are ESM with injected filesystem seams, so tests stay on
+// in-memory trees and never write to the real repository (same pattern as
+// the check validators above).
+
+const loadBuild = () => import("../scripts/build.mjs");
+const loadPackage = () => import("../scripts/package.mjs");
+const repoRead = (name) =>
+  require("node:fs").readFileSync(require("node:path").join(__dirname, "..", name));
+
+// In-memory POSIX-style tree implementing the fs seam shared by both
+// scripts. `ops` records every mutating call so tests can assert cleanup.
+function memoryTree(initialFiles = {}) {
+  const parentOf = (p) => {
+const cut = p.lastIndexOf("/");
+return cut === -1 ? "" : p.slice(0, cut);
+  };
+  const files = new Map();
+  const dirs = new Set([""]);
+  const ops = [];
+  const addParents = (p) => {
+for (let d = parentOf(p); d !== ""; d = parentOf(d)) dirs.add(d);
+  };
+  const childrenOf = (p) => {
+const names = new Set();
+const strip = (key) => key.slice(p === "" ? 0 : p.length + 1);
+for (const key of dirs) if (key !== "" && parentOf(key) === p) names.add(strip(key));
+for (const key of files.keys()) if (parentOf(key) === p) names.add(strip(key));
+return [...names].sort();
+  };
+  for (const [p, value] of Object.entries(initialFiles)) {
+files.set(p, Buffer.from(value));
+addParents(p);
+  }
+  return {
+ops,
+listDir: (p) => (dirs.has(p) ? childrenOf(p) : null),
+readFile: (p) => files.get(p) ?? null,
+writeFile: (p, data) => {
+  ops.push(["write", p]);
+  files.set(p, Buffer.from(data));
+  addParents(p);
+},
+mkdir: (p) => {
+  ops.push(["mkdir", p]);
+  dirs.add(p);
+},
+rename: (from, to) => {
+  ops.push(["rename", from, to]);
+  const prefix = `${from}/`;
+  for (const [key, data] of [...files]) {
+    if (key === from || key.startsWith(prefix)) {
+      files.delete(key);
+      files.set(key === from ? to : `${to}/${key.slice(prefix.length)}`, data);
+    }
+  }
+  for (const key of [...dirs]) {
+    if (key === from || key.startsWith(prefix)) {
+      dirs.delete(key);
+      dirs.add(key === from ? to : `${to}/${key.slice(prefix.length)}`);
+    }
+  }
+  addParents(to);
+},
+rm: (p) => {
+  ops.push(["rm", p]);
+  const prefix = `${p}/`;
+  for (const key of [...files.keys()]) if (key === p || key.startsWith(prefix)) files.delete(key);
+  for (const key of [...dirs]) if (key === p || key.startsWith(prefix)) dirs.delete(key);
+},
+  };
+}
+
+test("build stages exactly the three runtime files byte-for-byte and drops stale dist entries", async () => {
+  const { buildDist, EXPECTED_RUNTIME_FILES } = await loadBuild();
+  const sources = {
+"src/action-runtime.js": "action runtime bytes",
+"src/catalog-cache.js": "catalog cache bytes",
+"src/team-runtime.js": "team runtime bytes",
+"src/team-catalog.js": "team catalog bytes",
+"src/host-client.js": "host client bytes",
+"src/main.js": "main bytes",
+"src/score-service.js": "score service bytes",
+"src/score-image.js": "score image bytes",
+  };
+  const tree = memoryTree({
+...sources,
+"pkg/dist/stale.js": "stale bytes",
+"pkg/dist/main.js": "outdated bytes",
+  });
+  const result = buildDist({ srcDir: "src", distDir: "pkg/dist", fs: tree });
+  assert.deepEqual(result.copied, EXPECTED_RUNTIME_FILES);
+  assert.deepEqual(tree.listDir("pkg/dist"), EXPECTED_RUNTIME_FILES, "no stale or extra file survives");
+  for (const name of EXPECTED_RUNTIME_FILES) {
+assert.ok(tree.readFile(`pkg/dist/${name}`).equals(Buffer.from(sources[`src/${name}`])), name);
+  }
+  assert.equal(tree.listDir("pkg/dist.staging"), null, "staging is gone after a completed build");
+});
+
+test("build refuses an unexpected source file before staging or touching dist", async () => {
+  const { buildDist } = await loadBuild();
+  const tree = memoryTree({
+"src/action-runtime.js": "a",
+"src/host-client.js": "b",
+"src/main.js": "c",
+"src/score-service.js": "d",
+"src/extra.js": "unexpected",
+"pkg/dist/main.js": "previous bytes",
+  });
+  assert.throws(() => buildDist({ srcDir: "src", distDir: "pkg/dist", fs: tree }), /expected exactly/);
+  assert.deepEqual(tree.listDir("pkg/dist"), ["main.js"], "previous dist must stay untouched");
+  assert.equal(tree.listDir("pkg/dist.staging"), null);
+});
+
+test("build removes its staging directory on a mid-copy failure and leaves dist untouched", async () => {
+  const { buildDist } = await loadBuild();
+  const tree = memoryTree({
+"src/action-runtime.js": "a",
+"src/team-runtime.js": "b",
+"src/host-client.js": "c",
+"src/main.js": "d",
+"src/score-service.js": "e",
+"src/score-image.js": "f",
+"src/team-catalog.js": "g",
+"src/catalog-cache.js": "h",
+"pkg/dist/main.js": "previous bytes",
+  });
+  const failing = {
+...tree,
+writeFile: (p, data) => {
+  if (p === "pkg/dist.staging/host-client.js") throw new Error("simulated write failure");
+  return tree.writeFile(p, data);
+},
+  };
+  assert.throws(() => buildDist({ srcDir: "src", distDir: "pkg/dist", fs: failing }), /simulated write failure/);
+  assert.equal(tree.listDir("pkg/dist.staging"), null, "staging removed after failure");
+  assert.ok(tree.readFile("pkg/dist/main.js").equals(Buffer.from("previous bytes")));
+});
+
+test("the committed src/plugin tree matches the build manifest exactly", async () => {
+  const { EXPECTED_RUNTIME_FILES } = await loadBuild();
+  const listing = require("node:fs")
+.readdirSync(require("node:path").join(__dirname, "..", "src/plugin"))
+.sort();
+  assert.deepEqual(listing, EXPECTED_RUNTIME_FILES);
+});
+
+function fixturePackage() {
+  return {
+"pkg/manifest.json": "{}\n",
+"pkg/assets/plugin.png": "plugin png bytes",
+"pkg/assets/action.png": "action png bytes",
+"pkg/assets/ready.png": "ready png bytes",
+"pkg/assets/selected.png": "selected png bytes",
+"pkg/dist/action-runtime.js": "a",
+"pkg/dist/host-client.js": "b",
+"pkg/dist/main.js": "c",
+"pkg/dist/score-service.js": "d",
+  };
+}
+
+test("crc32 matches the published CRC-32 check values", async () => {
+  const { crc32 } = await loadPackage();
+  assert.equal(crc32(Buffer.alloc(0)), 0x00000000);
+  assert.equal(crc32(Buffer.from("123456789")), 0xcbf43926);
+});
+
+test("collectEntries yields sorted prefixed names with manifest at the plugin-folder root", async () => {
+  const { collectEntries, PLUGIN_FOLDER } = await loadPackage();
+  const entries = collectEntries({ pluginDir: "pkg", fs: memoryTree(fixturePackage()) });
+  const names = entries.map((entry) => entry.name);
+  assert.equal(names.length, 9);
+  assert.ok(names.every((name) => name.startsWith(`${PLUGIN_FOLDER}/`)));
+  assert.deepEqual(names, [...names].sort());
+  assert.equal(names[0], `${PLUGIN_FOLDER}/assets/action.png`);
+  assert.ok(names.includes(`${PLUGIN_FOLDER}/manifest.json`), "manifest sits at the plugin-folder root");
+  const manifest = entries.find((entry) => entry.name === `${PLUGIN_FOLDER}/manifest.json`);
+  assert.ok(manifest.data.equals(Buffer.from("{}\n")), "entry bytes are copied unmodified");
+});
+
+test("collectEntries excludes generated package output directories", async () => {
+  const { collectEntries } = await loadPackage();
+  const tree = memoryTree({
+...fixturePackage(),
+"pkg/package/com.ulanzi.sportboard.ulanziPlugin.zip": "old zip",
+"pkg/dist.staging/main.js": "interrupted build",
+  });
+  const names = collectEntries({ pluginDir: "pkg", fs: tree }).map((entry) => entry.name);
+  assert.ok(!names.some((name) => name.includes("/package/") || name.includes("/dist.staging/")));
+});
+
+test("collectEntries rejects traversal and absolute entry names", async () => {
+  const { collectEntries } = await loadPackage();
+  const base = memoryTree(fixturePackage());
+  const withListing = (name) => ({
+...base,
+listDir: (p) => (p === "pkg" ? [name] : base.listDir(p)),
+  });
+  for (const hostile of ["../evil.txt", "/abs.txt", "a\\b.txt"]) {
+assert.throws(() => collectEntries({ pluginDir: "pkg", fs: withListing(hostile) }), /unsafe entry name/, hostile);
+  }
+});
+
+test("createZip emits fixed-metadata ZIP32 store headers", async () => {
+  const { createZip, crc32, PLUGIN_FOLDER } = await loadPackage();
+  const name = `${PLUGIN_FOLDER}/manifest.json`;
+  const data = Buffer.from("{}\n");
+  const zip = createZip([{ name, data }]);
+  assert.equal(zip.readUInt32LE(0), 0x04034b50);
+  assert.equal(zip.readUInt16LE(4), 20, "version needed 2.0");
+  assert.equal(zip.readUInt16LE(6), 0, "no general-purpose flags");
+  assert.equal(zip.readUInt16LE(8), 0, "stored, not compressed");
+  assert.equal(zip.readUInt16LE(10), 0, "fixed DOS time");
+  assert.equal(zip.readUInt16LE(12), 0x0021, "fixed DOS date 1980-01-01");
+  assert.equal(zip.readUInt32LE(14), crc32(data));
+  assert.equal(zip.readUInt32LE(18), data.length);
+  assert.equal(zip.readUInt32LE(22), data.length);
+  const central = zip.indexOf(Buffer.from([0x50, 0x4b, 0x01, 0x02]));
+  assert.equal(zip.readUInt16LE(central + 4), 20, "version made by");
+  assert.equal(zip.readUInt16LE(central + 8), 0);
+  assert.equal(zip.readUInt16LE(central + 10), 0);
+  assert.equal(zip.readUInt16LE(central + 12), 0);
+  assert.equal(zip.readUInt16LE(central + 14), 0x0021);
+  assert.equal(zip.readUInt32LE(central + 38), (0o100644 << 16) >>> 0, "fixed permissions");
+  assert.equal(zip.readUInt32LE(central + 42), 0, "first local header offset");
+  const eocd = central + 46 + name.length;
+  assert.equal(zip.readUInt32LE(eocd), 0x06054b50);
+  assert.equal(zip.readUInt16LE(eocd + 10), 1, "one entry");
+  assert.equal(zip.readUInt32LE(eocd + 12), eocd - central, "central-directory size");
+  assert.equal(zip.readUInt32LE(eocd + 16), central, "central-directory offset");
+});
+
+test("two runs over an identical tree produce byte-identical archives with no absolute paths", async () => {
+  const { collectEntries, createZip } = await loadPackage();
+  const run = () => createZip(collectEntries({ pluginDir: "pkg", fs: memoryTree(fixturePackage()) }));
+  const first = run();
+  assert.ok(first.equals(run()));
+  assert.ok(!first.includes(Buffer.from(process.cwd())), "no environment-specific absolute path");
+});
+
+test("createZip rejects unsafe names and ZIP64-sized inputs instead of guessing", async () => {
+  const { createZip, PLUGIN_FOLDER } = await loadPackage();
+  for (const name of ["../evil.txt", "/abs.txt", "a\\b.txt", `${PLUGIN_FOLDER}/../x`]) {
+assert.throws(() => createZip([{ name, data: Buffer.alloc(1) }]), /unsafe entry name/, name);
+  }
+  const oversized = { name: `${PLUGIN_FOLDER}/big.bin`, data: { length: 0xffffffff + 1 } };
+  assert.throws(() => createZip([oversized]), /ZIP64/);
+  const half = { length: 0x80000000 };
+  assert.throws(
+() => createZip([
+  { name: `${PLUGIN_FOLDER}/a.bin`, data: half },
+  { name: `${PLUGIN_FOLDER}/b.bin`, data: half },
+]),
+/ZIP64/,
+"combined size also rejects",
+  );
+});
+
+test("zip layout verification pins the rooted central directory", async () => {
+  const { createZip, verifyZipLayout, PLUGIN_FOLDER } = await loadPackage();
+  const name = `${PLUGIN_FOLDER}/manifest.json`;
+  const zip = createZip([{ name, data: Buffer.from("{}\n") }]);
+  assert.deepEqual(verifyZipLayout(zip, [name]), [name]);
+  const tampered = Buffer.from(zip);
+  const central = zip.indexOf(Buffer.from([0x50, 0x4b, 0x01, 0x02]));
+  assert.equal(tampered[central + 46], 0x63); // sanity: "c" of "com.ulanzi..." at the central name
+  tampered[central + 46] = 0x58; // "c" -> "X"
+  assert.throws(() => verifyZipLayout(tampered, [name]), /central-directory/);
+});
+
+const README_ANCHORS = [
+  "football-data.org",
+  "Ulanzi D200",
+  "Dynamic competition and team selectors",
+  "two minutes",
+  "Team crest",
+  "setSettings",
+  "SHA-256",
+  "%APPDATA%",
+  "npm run check",
+  "npm test",
+  "npm run build",
+  "npm run package",
+  "MIT",
+  "not affiliated",
+];
+
+test("README documents the public plugin, installation, security and verification", () => {
+  const readme = repoRead("README.md").toString("utf8");
+  for (const anchor of README_ANCHORS) {
+    assert.ok(readme.includes(anchor), `README must contain: ${anchor}`);
+  }
+  assert.doesNotMatch(readme, /X-Auth-Token\s*[:=]\s*\S+/);
 });

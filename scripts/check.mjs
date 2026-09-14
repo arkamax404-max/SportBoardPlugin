@@ -15,7 +15,7 @@ const REQUIRED_MANIFEST_KEYS = ["Author", "Name", "Icon", "Version", "CodePath",
 const ALLOWED_MANIFEST_KEYS = [...REQUIRED_MANIFEST_KEYS, "Software"];
 const FORBIDDEN_MANIFEST_KEYS = ["Banner", "Detail", "MinimumVersion", "PropertyInspectorPath"];
 const REQUIRED_ACTION_KEYS = ["Name", "Icon", "UUID", "States", "DisableAutomaticStates", "Controllers", "Devices"];
-const FORBIDDEN_ACTION_KEYS = ["Banner", "Detail", "MinimumVersion", "PropertyInspectorPath"];
+const FORBIDDEN_ACTION_KEYS = ["Banner", "Detail", "MinimumVersion"];
 const EXPECTED_CONTROLLERS = ["Keypad"];
 const EXPECTED_DEVICES = ["D200"];
 const EXPECTED_STATE_NAMES = ["Ready", "Selected"];
@@ -150,7 +150,7 @@ function validateAction(manifest, action, path) {
     }
   }
   for (const key of keys) {
-    if (!REQUIRED_ACTION_KEYS.includes(key) && !FORBIDDEN_ACTION_KEYS.includes(key)) {
+    if (!REQUIRED_ACTION_KEYS.includes(key) && key !== "PropertyInspectorPath" && !FORBIDDEN_ACTION_KEYS.includes(key)) {
       defects.push(defect(path, "action.unknown-key", `undocumented action field ${key}`));
     }
   }
@@ -262,11 +262,6 @@ function safeRelative(path) {
 
 export function validatePackageStructure(fs) {
   const entries = fs.listDir("") ?? [];
-  if (entries.includes("property-inspector")) {
-    return [
-      defect(`${PLUGIN_FOLDER}/property-inspector`, "structure.property-inspector", "property-inspector directories are forbidden (D4)"),
-    ];
-  }
   return [];
 }
 

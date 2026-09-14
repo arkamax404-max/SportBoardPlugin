@@ -1,7 +1,20 @@
-# Local Pi runtime state
+# Local agent/runtime state
 .atl/
+.pi/
+.codegraph/
 
 # Plugin build/package outputs (generated, never committed)
 dist/
+dist.staging/
 package/
 node_modules/
+catalog-cache.json
+catalog-cache.json.tmp
+
+# Local credentials and signing material
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
