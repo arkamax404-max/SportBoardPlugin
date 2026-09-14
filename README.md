@@ -16,6 +16,8 @@ An unofficial Ulanzi Studio plugin for the **Ulanzi D200** that displays the foo
 ## Requirements
 
 - Ulanzi Studio with a D200 device.
+- Windows 10 or later.
+- macOS 12 or later is declared compatible but is pending physical validation; it has not yet been tested on macOS hardware.
 - Node.js 20 or later for development.
 - A football-data.org API token. Availability of competitions and fixtures depends on the account's plan.
 
@@ -75,9 +77,17 @@ scripts/                            Validation, build, and packaging tools
 openspec/                            Design and specification artifacts
 ```
 
-## Disclaimer
+## Trademark and logo disclaimer
 
-This project is not affiliated with or endorsed by Ulanzi or football-data.org. Team names, crests, competition data, and match data belong to their respective owners and are retrieved at runtime from football-data.org.
+Team names, club crests, competition logos, trademarks and other third-party visual assets displayed by this plugin are the property of their respective owners.
+
+This plugin is an independent, unofficial project and is not affiliated with, endorsed by, sponsored by, or officially connected with any football club, league, federation, competition, or football-data.org.
+
+Match data is obtained through the football-data.org API. Any third-party logos or crests are used solely for identification and informational purposes.
+
+The plugin itself is distributed under the MIT License. The MIT License applies only to the plugin's source code and does not grant any rights over third-party trademarks, logos, crests, names, or other protected assets.
+
+If you are a rights holder and believe any asset is being used improperly, please open an issue in the project repository so it can be reviewed or removed.
 
 ## License
 

@@ -26,16 +26,28 @@ const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0
 const PLUGIN_UUID = "com.ulanzi.ulanzistudio.sportboard";
 const ACTION_UUID = `${PLUGIN_UUID}.status`;
 const ASSET_NAMES = ["plugin.png", "action.png", "ready.png", "selected.png"];
+const BANNER_NAME = "banner.png";
 
 function baseManifest() {
   return {
     Author: "SportBoardPlugin Contributors",
     Name: "Sport Board",
+    Description: "Football match scores and fixtures for your Ulanzi D200.",
+    Detail:
+      "Sport Board displays the football match nearest to the current time for a team assigned to each Ulanzi D200 key. Select a competition and team, then view home and away crests, team names, kickoff time, score, and match date directly on the device. Match-day information refreshes every two minutes until the fixture reaches a terminal state, and pressing the key triggers a manual refresh. A football-data.org API token is required, and competition and fixture availability depends on the account plan.",
+    Category: "Sports",
     Icon: "assets/plugin.png",
+    CategoryIcon: "assets/plugin.png",
+    Banner: ["assets/banners/banner.png"],
     Version: "0.1.0",
     CodePath: "dist/main.js",
     Type: "JavaScript",
     UUID: PLUGIN_UUID,
+    OS: [
+      { Platform: "windows", MinimumVersion: "10" },
+      { Platform: "mac", MinimumVersion: "12" },
+    ],
+    Software: { MinVersion: "2.1.4" },
     Actions: [
       {
         Name: "Sport Board Status",
@@ -78,8 +90,15 @@ function memoryFs(directories, fileHeads) {
 
 function baseFs() {
   return memoryFs(
-    { "": ["manifest.json", "assets"], assets: [...ASSET_NAMES] },
-    Object.fromEntries(ASSET_NAMES.map((name) => [`assets/${name}`, PNG_SIGNATURE])),
+    {
+      "": ["manifest.json", "assets"],
+      assets: [...ASSET_NAMES, "banners"],
+      "assets/banners": [BANNER_NAME],
+    },
+    {
+      ...Object.fromEntries(ASSET_NAMES.map((name) => [`assets/${name}`, PNG_SIGNATURE])),
+      [`assets/banners/${BANNER_NAME}`]: PNG_SIGNATURE,
+    },
   );
 }
 
@@ -116,10 +135,10 @@ test("manifest field gate: missing, unknown and forbidden keys are rejected", as
   assert.deepEqual(rulesOf(validateManifest(missing)), ["manifest.required-key"]);
 
   const unknown = baseManifest();
-  unknown.Category = "Sports";
+  unknown.Experimental = true;
   assert.deepEqual(rulesOf(validateManifest(unknown)), ["manifest.unknown-key"]);
 
-  for (const key of ["Banner", "Detail", "MinimumVersion"]) {
+  for (const key of ["MinimumVersion", "PropertyInspectorPath"]) {
     const forbidden = baseManifest();
     forbidden[key] = "forbidden";
     assert.deepEqual(rulesOf(validateManifest(forbidden)), ["manifest.forbidden-key"], key);
@@ -128,6 +147,24 @@ test("manifest field gate: missing, unknown and forbidden keys are rejected", as
   const inspector = baseManifest();
   inspector.Actions[0].PropertyInspectorPath = "property-inspector/inspector.html";
   assert.deepEqual(rulesOf(validateManifest(inspector)), []);
+});
+
+test("publication metadata gate pins marketplace text, paths, platforms and minimum versions", async () => {
+  const { validateManifest } = await loadCheck();
+  const mutations = [
+    ["Description", "Other description", "manifest.description"],
+    ["Detail", "Other detail", "manifest.detail"],
+    ["Category", "Other", "manifest.category"],
+    ["CategoryIcon", "assets/action.png", "manifest.category-icon"],
+    ["Banner", ["assets/banner.png"], "manifest.banner"],
+    ["OS", [{ Platform: "macOS", MinimumVersion: "12" }], "manifest.os"],
+    ["Software", { MinVersion: "2.1.3" }, "manifest.software"],
+  ];
+  for (const [key, value, rule] of mutations) {
+    const manifest = baseManifest();
+    manifest[key] = value;
+    assert.deepEqual(rulesOf(validateManifest(manifest)), [rule], key);
+  }
 });
 
 test("identity gate: plugin UUID shape and extending action UUID", async () => {
@@ -218,11 +255,15 @@ test("asset gate: missing, mis-cased, escaping and non-PNG references fail", asy
 
   const missingReady = baseManifest();
   const missingFs = memoryFs(
-    { assets: ["plugin.png", "action.png", "selected.png"] },
+    {
+      assets: ["plugin.png", "action.png", "selected.png", "banners"],
+      "assets/banners": [BANNER_NAME],
+    },
     {
       "assets/plugin.png": PNG_SIGNATURE,
       "assets/action.png": PNG_SIGNATURE,
       "assets/selected.png": PNG_SIGNATURE,
+      [`assets/banners/${BANNER_NAME}`]: PNG_SIGNATURE,
     },
   );
   const missingDefects = validateAssets(missingReady, missingFs);
@@ -247,10 +288,22 @@ test("asset gate: missing, mis-cased, escaping and non-PNG references fail", asy
 
   const notPng = baseManifest();
   const fakeHeadFs = memoryFs(
-    { assets: [...ASSET_NAMES] },
-    { ...Object.fromEntries(ASSET_NAMES.map((name) => [`assets/${name}`, PNG_SIGNATURE])), "assets/plugin.png": Buffer.from([0x00]) },
+    { assets: [...ASSET_NAMES, "banners"], "assets/banners": [BANNER_NAME] },
+    {
+      ...Object.fromEntries(ASSET_NAMES.map((name) => [`assets/${name}`, PNG_SIGNATURE])),
+      "assets/plugin.png": Buffer.from([0x00]),
+      [`assets/banners/${BANNER_NAME}`]: PNG_SIGNATURE,
+    },
   );
   assert.deepEqual(rulesOf(validateAssets(notPng, fakeHeadFs)), ["asset.png-signature"]);
+
+  const missingBannerFs = memoryFs(
+    { assets: [...ASSET_NAMES, "banners"], "assets/banners": [] },
+    Object.fromEntries(ASSET_NAMES.map((name) => [`assets/${name}`, PNG_SIGNATURE])),
+  );
+  const missingBannerDefects = validateAssets(baseManifest(), missingBannerFs);
+  assert.deepEqual(rulesOf(missingBannerDefects), ["asset.missing"]);
+  assert.equal(missingBannerDefects[0].path, "assets/banners/banner.png");
 });
 
 test("no property-inspector directory may exist in the package", async () => {
@@ -552,6 +605,9 @@ const README_ANCHORS = [
   "npm run package",
   "MIT",
   "not affiliated",
+  "Windows 10 or later",
+  "macOS 12 or later",
+  "pending physical validation",
 ];
 
 test("README documents the public plugin, installation, security and verification", () => {

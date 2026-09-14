@@ -1,0 +1,15 @@
+{
+  "cover": "assets/cover.png",
+  "screenshots": [
+    "assets/banner.png"
+  ],
+  "longDescription": "Sport Board displays the football match nearest to the current time for a team assigned to each Ulanzi D200 key. Select a competition and team, then view home and away crests, team names, kickoff time, score, and match date directly on the device. Match-day information refreshes every two minutes until the fixture reaches a terminal state, and pressing the key triggers a manual refresh. A football-data.org API token is required, and competition and fixture availability depends on the account plan.",
+  "deviceTypes": [
+    "D200"
+  ],
+  "tags": [
+    "football",
+    "scores",
+    "fixtures"
+  ]
+}

@@ -11,14 +11,43 @@ import { fileURLToPath } from "node:url";
 
 export const PLUGIN_FOLDER = "com.ulanzi.sportboard.ulanziPlugin";
 
-const REQUIRED_MANIFEST_KEYS = ["Author", "Name", "Icon", "Version", "CodePath", "Type", "UUID", "Actions"];
-const ALLOWED_MANIFEST_KEYS = [...REQUIRED_MANIFEST_KEYS, "Software"];
-const FORBIDDEN_MANIFEST_KEYS = ["Banner", "Detail", "MinimumVersion", "PropertyInspectorPath"];
+const REQUIRED_MANIFEST_KEYS = [
+  "Author",
+  "Name",
+  "Description",
+  "Detail",
+  "Category",
+  "Icon",
+  "CategoryIcon",
+  "Banner",
+  "Version",
+  "CodePath",
+  "Type",
+  "UUID",
+  "OS",
+  "Software",
+  "Actions",
+];
+const ALLOWED_MANIFEST_KEYS = [...REQUIRED_MANIFEST_KEYS];
+const FORBIDDEN_MANIFEST_KEYS = ["MinimumVersion", "PropertyInspectorPath"];
 const REQUIRED_ACTION_KEYS = ["Name", "Icon", "UUID", "States", "DisableAutomaticStates", "Controllers", "Devices"];
 const FORBIDDEN_ACTION_KEYS = ["Banner", "Detail", "MinimumVersion"];
 const EXPECTED_CONTROLLERS = ["Keypad"];
 const EXPECTED_DEVICES = ["D200"];
 const EXPECTED_STATE_NAMES = ["Ready", "Selected"];
+const EXPECTED_PUBLICATION_METADATA = {
+  Description: "Football match scores and fixtures for your Ulanzi D200.",
+  Detail:
+    "Sport Board displays the football match nearest to the current time for a team assigned to each Ulanzi D200 key. Select a competition and team, then view home and away crests, team names, kickoff time, score, and match date directly on the device. Match-day information refreshes every two minutes until the fixture reaches a terminal state, and pressing the key triggers a manual refresh. A football-data.org API token is required, and competition and fixture availability depends on the account plan.",
+  Category: "Sports",
+  CategoryIcon: "assets/plugin.png",
+  Banner: ["assets/banners/banner.png"],
+  OS: [
+    { Platform: "windows", MinimumVersion: "10" },
+    { Platform: "mac", MinimumVersion: "12" },
+  ],
+  Software: { MinVersion: "2.1.4" },
+};
 const REQUIRED_SCRIPTS = {
   check: "node scripts/check.mjs",
   test: "node --test test/*.test.js",
@@ -104,16 +133,16 @@ export function validateManifest(manifest) {
       defects.push(defect("manifest.json", "manifest.forbidden-key", `forbidden field ${key} (A4/D4)`));
     }
   }
-  if (isPlainObject(manifest) && "Software" in manifest) {
-    const software = manifest.Software;
-    if (!isPlainObject(software)) {
-      defects.push(defect("manifest.json", "manifest.unknown-key", "Software must be an object"));
-    } else {
-      for (const key of Object.keys(software)) {
-        if (key !== "MinVersion") {
-          defects.push(defect("manifest.json", "manifest.unknown-key", `undocumented Software field ${key}`));
-        }
-      }
+  for (const [key, expected] of Object.entries(EXPECTED_PUBLICATION_METADATA)) {
+    if (manifest?.[key] !== undefined && !deepEquals(manifest[key], expected)) {
+      const ruleName = key === "OS" ? "os" : key.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`).replace(/^-/, "");
+      defects.push(
+        defect(
+          "manifest.json",
+          `manifest.${ruleName}`,
+          `${key} must be exactly ${JSON.stringify(expected)}`,
+        ),
+      );
     }
   }
   if (manifest?.Type !== undefined && manifest.Type !== "JavaScript") {
@@ -211,11 +240,20 @@ export function validateAssets(manifest, fs) {
 
 function collectAssetReferences(manifest) {
   const references = [];
+  const seen = new Set();
   const push = (path, image) => {
-    if (typeof path === "string") references.push({ path, image });
+    if (typeof path !== "string") return;
+    const key = `${image}:${path}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    references.push({ path, image });
   };
   push(manifest?.CodePath, false);
   push(manifest?.Icon, true);
+  push(manifest?.CategoryIcon, true);
+  for (const banner of Array.isArray(manifest?.Banner) ? manifest.Banner : []) {
+    push(banner, true);
+  }
   for (const action of Array.isArray(manifest?.Actions) ? manifest.Actions : []) {
     push(action?.Icon, true);
     for (const state of Array.isArray(action?.States) ? action.States : []) {
