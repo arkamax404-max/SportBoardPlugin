@@ -37,6 +37,12 @@ test("createScoreImage embeds two cached crest images in the match layout", () =
   assert.equal((svg.match(/<image /g) || []).length, 2);
   assert.match(svg, /Real Betis/);
   assert.match(svg, /2 - 1/);
+  assert.match(svg, /y="178"[^>]*font-size="19"[^>]*font-weight="700"[^>]*>2026-09-14<\/text>/);
+});
+
+test("createScoreImage renders the generic date line larger and explicitly bold", () => {
+  const svg = decode(createScoreImage("Home\nAway\n0 - 0\n9/14/2026"));
+  assert.match(svg, /y="178"[^>]*font-size="19"[^>]*font-weight="700"[^>]*>9\/14\/2026<\/text>/);
 });
 
 test("createScoreImage ignores non-image crest data", () => {

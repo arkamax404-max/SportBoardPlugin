@@ -19,7 +19,7 @@ const LINE_LAYOUT = [
   { y: 38, fontSize: 19, color: "#ffffff" },
   { y: 76, fontSize: 19, color: "#ffffff" },
   { y: 132, fontSize: 40, color: "#8ee7ff" },
-  { y: 178, fontSize: 17, color: "#9aa4b2" },
+  { y: 178, fontSize: 19, color: "#9aa4b2" },
   { y: 190, fontSize: 15, color: "#9aa4b2" },
 ];
 
@@ -47,7 +47,7 @@ function crestMatchBody(lines, { homeCrest, awayCrest }) {
   };
   const result = `<text x="98" y="134" fill="#8ee7ff" font-family="Arial, sans-serif" font-size="40" font-weight="700" text-anchor="middle">${escapeXml(lines[2] ?? "-")}</text>`;
   const date = lines[3]
-    ? `<text x="98" y="178" fill="#9aa4b2" font-family="Arial, sans-serif" font-size="17" font-weight="700" text-anchor="middle">${escapeXml(lines[3])}</text>`
+    ? `<text x="98" y="178" fill="#9aa4b2" font-family="Arial, sans-serif" font-size="19" font-weight="700" text-anchor="middle">${escapeXml(lines[3])}</text>`
     : "";
   return `${image(homeCrest, 20)}${image(awayCrest, 128)}${team(lines[0] ?? "Home", 44)}${team(lines[1] ?? "Away", 152)}${result}${date}`;
 }

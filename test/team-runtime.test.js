@@ -6,6 +6,7 @@ const {
   DEFAULT_TEAM_ID,
   POLL_INTERVAL_MS,
   TeamRuntime,
+  formatLocalMatchDate,
   selectNearestMatch,
 } = require("../src/plugin/team-runtime.js");
 
@@ -44,6 +45,22 @@ const settings = (overrides = {}) => ({
   param: { token: "t", competition: "PD", teamId: 90, teamLabel: "Betis", ...overrides },
 });
 
+test("formatLocalMatchDate prefers kickoff and uses the host locale and timezone", () => {
+  const kickoff = "2026-09-14T23:30:00.000Z";
+  assert.equal(
+    formatLocalMatchDate(event({ kickoff, date: "1999-01-01" })),
+    new Date(kickoff).toLocaleDateString(),
+  );
+});
+
+test("formatLocalMatchDate safely falls back to a valid date-only value", () => {
+  const expected = new Date(2026, 8, 14).toLocaleDateString();
+  assert.equal(formatLocalMatchDate(event({ kickoff: "invalid", date: "2026-09-14" })), expected);
+  assert.equal(formatLocalMatchDate(event({ kickoff: null, date: "2026-09-14" })), expected);
+  assert.equal(formatLocalMatchDate(event({ kickoff: "invalid", date: "2026-02-30" })), null);
+  assert.equal(formatLocalMatchDate(event({ kickoff: "invalid", date: "not-a-date" })), null);
+});
+
 test("selectNearestMatch chooses absolute proximity and future wins a tie", () => {
   const past = event({ id: "past", kickoff: "2026-09-14T17:00:00Z" });
   const future = event({ id: "future", kickoff: "2026-09-14T19:00:00Z" });
@@ -61,16 +78,18 @@ test("TeamRuntime loads the selected team's nearest match without a configured d
   await h.runtime.refresh(settings());
   assert.equal(DEFAULT_TEAM_ID, 90);
   assert.deepEqual(h.calls, [[90, "t", "PD", NOW]]);
+  const displayedDate = new Date("2026-09-13T20:00:00Z").toLocaleDateString();
   assert.deepEqual(h.sent, [
     { context: "ctx", data: "Betis\nLoading…" },
-    { context: "ctx", data: "Real Betis\nSevilla FC\n2 - 1\n2026-09-13" },
+    { context: "ctx", data: `Real Betis\nSevilla FC\n2 - 1\n${displayedDate}` },
   ]);
 });
 
 test("TeamRuntime shows kickoff time before a match and hides provider failures", async () => {
   const pending = harness({ matches: [event({ status: "TIMED", homeScore: null, awayScore: null, kickoff: "2026-09-15T19:00:00Z", date: "2026-09-15", time: "19:00:00" })] });
   await pending.runtime.refresh(settings());
-  assert.equal(pending.sent.at(-1).data, "Real Betis\nSevilla FC\n19:00\n2026-09-15");
+  const displayedDate = new Date("2026-09-15T19:00:00Z").toLocaleDateString();
+  assert.equal(pending.sent.at(-1).data, `Real Betis\nSevilla FC\n19:00\n${displayedDate}`);
 
   const none = harness({ matches: [] });
   await none.runtime.refresh(settings());

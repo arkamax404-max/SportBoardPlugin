@@ -64,12 +64,28 @@ function shouldPoll(match, reference) {
   return !TERMINAL_STATUSES.has(status) && sameLocalCalendarDate(new Date(time), reference);
 }
 
+function formatLocalMatchDate(event) {
+  const time = kickoffTime(event);
+  if (time !== null) return new Date(time).toLocaleDateString();
+
+  const parts = typeof event?.date === "string"
+    ? /^(\d{4})-(\d{2})-(\d{2})$/.exec(event.date)
+    : null;
+  if (!parts) return null;
+  const fallback = new Date(Number(parts[1]), Number(parts[2]) - 1, Number(parts[3]));
+  const isSameDate = fallback.getFullYear() === Number(parts[1])
+    && fallback.getMonth() === Number(parts[2]) - 1
+    && fallback.getDate() === Number(parts[3]);
+  return isSameDate ? fallback.toLocaleDateString() : null;
+}
+
 function renderMatch(event) {
   const hasScore = event.homeScore !== null && event.homeScore !== undefined
     && event.awayScore !== null && event.awayScore !== undefined;
   const result = hasScore ? `${event.homeScore} - ${event.awayScore}` : event.time?.slice(0, 5) ?? "-";
   const lines = [event.homeTeam ?? "Home", event.awayTeam ?? "Away", result];
-  if (event.date) lines.push(event.date);
+  const date = formatLocalMatchDate(event);
+  if (date) lines.push(date);
   return lines.join("\n");
 }
 
@@ -187,6 +203,7 @@ module.exports = {
   DEFAULT_TEAM_LABEL,
   POLL_INTERVAL_MS,
   TeamRuntime,
+  formatLocalMatchDate,
   isTeamMatch,
   renderMatch,
   selectNearestMatch,
