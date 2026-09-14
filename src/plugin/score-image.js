@@ -23,6 +23,14 @@ const LINE_LAYOUT = [
   { y: 190, fontSize: 15, color: "#9aa4b2" },
 ];
 
+const LIVE_LINE_LAYOUT = [
+  { y: 55, fontSize: 19, color: "#ffffff" },
+  { y: 86, fontSize: 19, color: "#ffffff" },
+  { y: 134, fontSize: 40, color: "#8ee7ff" },
+  { y: 178, fontSize: 19, color: "#9aa4b2" },
+  { y: 190, fontSize: 15, color: "#9aa4b2" },
+];
+
 function escapeXml(value) {
   return String(value)
     .replaceAll("&", "&amp;")
@@ -52,6 +60,10 @@ function crestMatchBody(lines, { homeCrest, awayCrest }) {
   return `${image(homeCrest, 20)}${image(awayCrest, 128)}${team(lines[0] ?? "Home", 44)}${team(lines[1] ?? "Away", 152)}${result}${date}`;
 }
 
+function liveBadge() {
+  return '<g aria-label="Live"><rect x="72" y="8" width="52" height="24" rx="7" fill="#d71920"/><text x="98" y="25" fill="#ffffff" font-family="Arial, sans-serif" font-size="13" font-weight="700" text-anchor="middle">LIVE</text></g>';
+}
+
 function createScoreImage(text, options = {}) {
   if (typeof text !== "string") return null;
   const lines = text
@@ -61,13 +73,15 @@ function createScoreImage(text, options = {}) {
     .slice(0, MAX_LINES);
   if (lines.length === 0) return null;
   const hasCrest = isEmbeddedImage(options.homeCrest) || isEmbeddedImage(options.awayCrest);
+  const layout = options.live === true && !hasCrest ? LIVE_LINE_LAYOUT : LINE_LAYOUT;
   const body = hasCrest
     ? crestMatchBody(lines, options)
     : lines.map((line, index) => {
-      const { y, fontSize, color } = LINE_LAYOUT[index];
+      const { y, fontSize, color } = layout[index];
       return `<text x="${SIZE / 2}" y="${y}" fill="${color}" font-family="Arial, sans-serif" font-size="${fontSize}" font-weight="700" text-anchor="middle">${escapeXml(line)}</text>`;
     }).join("");
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="${SIZE}" height="${SIZE}" viewBox="0 0 ${SIZE} ${SIZE}"><rect width="${SIZE}" height="${SIZE}" rx="12" fill="#101820"/>${body}</svg>`;
+  const badge = options.live === true ? liveBadge() : "";
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="${SIZE}" height="${SIZE}" viewBox="0 0 ${SIZE} ${SIZE}"><rect width="${SIZE}" height="${SIZE}" rx="12" fill="#101820"/>${body}${badge}</svg>`;
   return `data:image/svg+xml;base64,${Buffer.from(svg, "utf8").toString("base64")}`;
 }
 

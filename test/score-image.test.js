@@ -50,6 +50,25 @@ test("createScoreImage ignores non-image crest data", () => {
   assert.doesNotMatch(svg, /<image /);
 });
 
+test("createScoreImage renders a fixed LIVE badge with and without crests", () => {
+  const generic = decode(createScoreImage("Home\nAway\n1 - 0\n9/14/2026", { live: true }));
+  assert.match(generic, /fill="#d71920"/);
+  assert.match(generic, />LIVE<\/text>/);
+  assert.match(generic, /<text x="98" y="55"[^>]*>Home<\/text>/, "generic team text moves below the badge");
+
+  const crests = decode(createScoreImage("Home\nAway\n1 - 0", {
+    live: true,
+    homeCrest: "data:image/png;base64,aG9tZQ==",
+    awayCrest: "data:image/png;base64,YXdheQ==",
+  }));
+  assert.match(crests, />LIVE<\/text>/);
+  assert.equal((crests.match(/<image /g) || []).length, 2);
+  assert.match(crests, /<rect x="72" y="8" width="52" height="24"/);
+
+  const notLive = decode(createScoreImage("Home\nAway\n1 - 0", { live: false }));
+  assert.doesNotMatch(notLive, />LIVE<\/text>/);
+});
+
 test("createScoreImage keeps at most five meaningful lines", () => {
   const svg = decode(createScoreImage("1\n2\n3\n4\n5\n6\n7"));
   assert.match(svg, />5</);
