@@ -37,6 +37,15 @@ function isTeamMatch(event, teamId) {
   return Boolean(event) && (event.homeTeamId === teamId || event.awayTeamId === teamId);
 }
 
+/** @returns {null | "home" | "away"} */
+function assignedTeamSide(match, teamId) {
+  if (!Number.isInteger(teamId)) return null;
+  const home = match?.homeTeamId === teamId;
+  const away = match?.awayTeamId === teamId;
+  if (home === away) return null;
+  return home ? "home" : "away";
+}
+
 function kickoffTime(event) {
   const value = Date.parse(event?.kickoff ?? event?.utcDate);
   return Number.isNaN(value) ? null : value;
@@ -581,12 +590,18 @@ class TeamRuntime {
       entry.selectedStatus = match.status;
       entry.selectedMatchId = matchIdOf(match);
       const text = renderMatch(match, reference);
-      const options = { homeCrest, awayCrest, live: isLiveMatch(match), goalSide };
+      const options = {
+        homeCrest,
+        awayCrest,
+        assignedTeamSide: assignedTeamSide(match, teamId),
+        live: isLiveMatch(match),
+        goalSide,
+      };
       const schedule = entry.viewMode !== "last" ? decideMatchSchedule(match, this.#now()) : { kind: "none" };
       if (entry.viewMode !== "last") {
         if (schedule.kind === "poll-in-2m") this.#schedulePoll(context, entry, schedule.delay, match, { ...options, goalSide: null });
         else if (schedule.kind === "wake-at-kickoff") {
-          this.#scheduleLocalRedraw(context, entry, match, { homeCrest, awayCrest });
+          this.#scheduleLocalRedraw(context, entry, match, { homeCrest, awayCrest, assignedTeamSide: options.assignedTeamSide });
         }
       }
       this.#draw(context, text, schedule.kind === "poll-in-2m" ? { ...options, refreshProgress: 1 } : options);

@@ -11,6 +11,7 @@
 const SIZE = 196;
 const MAX_LINES = 5;
 const PROGRESS_BAR = { x: 12, y: 190, width: 172, height: 4 };
+const ASSIGNED_TEAM_INDICATOR = { y: 7, halfWidth: 16, strokeWidth: 4, color: "#d7dde5" };
 
 // Four-row match layout: home team, away team, result, date. The result row is
 // the visual anchor, so it is larger and coloured; the date row is deliberately
@@ -34,8 +35,10 @@ function escapeXml(value) {
 }
 
 function isEmbeddedImage(value) {
-  return typeof value === "string"
-    && /^data:image\/(?:png|jpeg|webp|svg\+xml);base64,[A-Za-z0-9+/=]+$/.test(value);
+  if (typeof value !== "string") return false;
+  const match = /^data:image\/(?:png|jpeg|webp|svg\+xml);base64,(.*)$/.exec(value);
+  if (match === null || match[1].length === 0) return false;
+  return /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(match[1]);
 }
 
 function lowerRowFit(line) {
@@ -61,6 +64,16 @@ function crestMatchBody(lines, { homeCrest, awayCrest }) {
 }
 
 /** @typedef {null | "home" | "away" | "both"} GoalSide */
+/** @typedef {null | "home" | "away"} AssignedTeamSide */
+
+function assignedTeamIndicator(side, { homeCrest, awayCrest }) {
+  if (side !== "home" && side !== "away") return "";
+  const crest = side === "home" ? homeCrest : awayCrest;
+  if (!isEmbeddedImage(crest)) return "";
+  const center = side === "home" ? 44 : 152;
+  const label = side === "home" ? "Assigned home team" : "Assigned away team";
+  return `<g aria-label="${label}"><line x1="${center - ASSIGNED_TEAM_INDICATOR.halfWidth}" y1="${ASSIGNED_TEAM_INDICATOR.y}" x2="${center + ASSIGNED_TEAM_INDICATOR.halfWidth}" y2="${ASSIGNED_TEAM_INDICATOR.y}" stroke="${ASSIGNED_TEAM_INDICATOR.color}" stroke-width="${ASSIGNED_TEAM_INDICATOR.strokeWidth}" stroke-linecap="round"/></g>`;
+}
 
 function goalMarkers(goalSide) {
   const marker = (side) => {
@@ -82,7 +95,7 @@ function refreshProgressBar(progress) {
   return `<g aria-label="Automatic refresh time remaining"><rect x="${PROGRESS_BAR.x}" y="${PROGRESS_BAR.y}" width="${PROGRESS_BAR.width}" height="${PROGRESS_BAR.height}" rx="2" fill="#2b3742"/><rect x="${PROGRESS_BAR.x}" y="${PROGRESS_BAR.y}" width="${width}" height="${PROGRESS_BAR.height}" rx="2" fill="#8ee7ff"/></g>`;
 }
 
-/** @param {string} text @param {{ homeCrest?: string, awayCrest?: string, goalSide?: GoalSide, refreshProgress?: number }} options */
+/** @param {string} text @param {{ homeCrest?: string, awayCrest?: string, assignedTeamSide?: AssignedTeamSide, goalSide?: GoalSide, refreshProgress?: number }} options */
 function createScoreImage(text, options = {}) {
   if (typeof text !== "string") return null;
   const lines = text
@@ -98,9 +111,10 @@ function createScoreImage(text, options = {}) {
       const { y, fontSize, color } = LINE_LAYOUT[index];
       return `<text x="${SIZE / 2}" y="${y}" fill="${color}" font-family="Arial, sans-serif" font-size="${fontSize}" font-weight="700" text-anchor="middle"${index === 3 ? lowerRowFit(line) : ""}>${escapeXml(line)}</text>`;
     }).join("");
+  const assignedTeam = assignedTeamIndicator(options.assignedTeamSide, options);
   const markers = goalMarkers(options.goalSide);
   const progress = refreshProgressBar(options.refreshProgress);
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="${SIZE}" height="${SIZE}" viewBox="0 0 ${SIZE} ${SIZE}"><rect width="${SIZE}" height="${SIZE}" rx="12" fill="#101820"/>${body}${markers}${progress}</svg>`;
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="${SIZE}" height="${SIZE}" viewBox="0 0 ${SIZE} ${SIZE}"><rect width="${SIZE}" height="${SIZE}" rx="12" fill="#101820"/>${body}${assignedTeam}${markers}${progress}</svg>`;
   return `data:image/svg+xml;base64,${Buffer.from(svg, "utf8").toString("base64")}`;
 }
 

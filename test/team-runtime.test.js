@@ -503,6 +503,52 @@ test("TeamRuntime loads both crests and passes them to the renderer", async () =
   assert.deepEqual(urls, [match.homeCrestUrl, match.awayCrestUrl]);
   assert.match(rendered.at(-1).options.homeCrest, /^data:image\/png;base64,/);
   assert.match(rendered.at(-1).options.awayCrest, /^data:image\/png;base64,/);
+  assert.equal(rendered.at(-1).options.assignedTeamSide, "home");
+});
+
+test("TeamRuntime derives the assigned side from the final enriched match identity", async () => {
+  const listMatch = event({
+    id: "42",
+    status: "IN_PLAY",
+    minute: null,
+    homeTeamId: null,
+    awayTeamId: 90,
+  });
+  const h = harness({
+    matches: [listMatch],
+    loadMatchDetail: async () => ({ ...listMatch, homeTeamId: 559, minute: 67 }),
+  });
+
+  await h.runtime.refresh(settings());
+
+  assert.equal(h.rendered.at(-1).options.assignedTeamSide, "away");
+});
+
+test("TeamRuntime omits an ambiguous assigned side", async () => {
+  const h = harness({ matches: [event({ homeTeamId: 90, awayTeamId: 90 })] });
+
+  await h.runtime.refresh(settings());
+
+  assert.equal(h.rendered.at(-1).options.assignedTeamSide, null);
+});
+
+test("TeamRuntime preserves the selected side through toggle navigation and background polling", async () => {
+  const matches = [
+    event({ id: "last", status: "FINISHED", kickoff: "2026-09-14T17:00:00Z", homeTeamId: 559, awayTeamId: 90 }),
+    event({ id: "live", status: "IN_PLAY", kickoff: "2026-09-14T17:55:00Z", homeTeamId: 90, awayTeamId: 559 }),
+  ];
+  const h = harness({ matches });
+
+  await h.runtime.refresh(settings(), { resetMode: "always" });
+  assert.equal(h.rendered.at(-1).options.assignedTeamSide, "home");
+
+  await h.runtime.toggle({ context: "ctx" });
+  assert.equal(h.rendered.at(-1).options.assignedTeamSide, "away");
+
+  await h.runtime.toggle({ context: "ctx" });
+  assert.equal(h.rendered.at(-1).options.assignedTeamSide, "home");
+  await h.timers.at(-1).callback();
+  assert.equal(h.rendered.at(-1).options.assignedTeamSide, "home");
 });
 
 test("TeamRuntime marks IN_PLAY, PAUSED and LIVE matches as live even when crests fail", async () => {
@@ -892,6 +938,7 @@ test("automatic polling draws local remaining-time progress without provider or 
   await h.progressTimers[0].callback();
   assert.equal(h.rendered.at(-1).options.refreshProgress, 0.5);
   assert.equal(h.rendered.at(-1).options.goalSide, null);
+  assert.equal(h.rendered.at(-1).options.assignedTeamSide, "home");
   assert.match(h.rendered.at(-1).text, /~HALF TIME$/, "local redraws advance estimates from the injected clock");
   assert.equal(h.calls.length, 1, "progress redraws do not request match data");
   assert.deepEqual(crestLoads, ["home", "away"], "progress redraws reuse captured crests");
@@ -995,6 +1042,7 @@ test("a local countdown tick redraws captured data without API, crest, audio or 
   assert.deepEqual(h.rendered.at(-1).options, {
     homeCrest: "crest:home",
     awayCrest: "crest:away",
+    assignedTeamSide: "home",
     live: false,
     goalSide: null,
   });

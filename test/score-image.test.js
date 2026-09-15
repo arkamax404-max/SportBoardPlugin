@@ -40,6 +40,40 @@ test("createScoreImage embeds two cached crest images in the match layout", () =
   assert.match(svg, /y="178"[^>]*font-size="19"[^>]*font-weight="700"[^>]*>2026-09-14<\/text>/);
 });
 
+test("createScoreImage marks the assigned home or away crest with one compact accessible line", () => {
+  const crests = {
+    homeCrest: "data:image/png;base64,aG9tZQ==",
+    awayCrest: "data:image/png;base64,YXdheQ==",
+  };
+  const home = decode(createScoreImage("Home\nAway\n0 - 0", { ...crests, assignedTeamSide: "home" }));
+  assert.match(home, /<g aria-label="Assigned home team"><line x1="28" y1="7" x2="60" y2="7" stroke="#d7dde5" stroke-width="4" stroke-linecap="round"\/><\/g>/);
+  assert.equal((home.match(/Assigned (?:home|away) team/g) || []).length, 1);
+
+  const away = decode(createScoreImage("Home\nAway\n0 - 0", { ...crests, assignedTeamSide: "away" }));
+  assert.match(away, /<g aria-label="Assigned away team"><line x1="136" y1="7" x2="168" y2="7" stroke="#d7dde5" stroke-width="4" stroke-linecap="round"\/><\/g>/);
+  assert.equal((away.match(/Assigned (?:home|away) team/g) || []).length, 1);
+});
+
+test("createScoreImage renders the assigned line only when that crest is valid", () => {
+  const homeCrest = "data:image/png;base64,aG9tZQ==";
+  const awayCrest = "data:image/png;base64,YXdheQ==";
+  const selectedOnly = decode(createScoreImage("Home\nAway\n0 - 0", { homeCrest, assignedTeamSide: "home" }));
+  assert.match(selectedOnly, /Assigned home team/);
+  assert.equal((selectedOnly.match(/<image /g) || []).length, 1);
+
+  for (const options of [
+    { awayCrest, assignedTeamSide: "home" },
+    { homeCrest, assignedTeamSide: "away" },
+    { homeCrest, awayCrest, assignedTeamSide: null },
+    { homeCrest, awayCrest, assignedTeamSide: "both" },
+    { assignedTeamSide: "home" },
+  ]) {
+    const svg = decode(createScoreImage("Home\nAway\n0 - 0", options));
+    assert.doesNotMatch(svg, /Assigned (?:home|away) team/);
+    assert.doesNotMatch(svg, /stroke="#d7dde5"/);
+  }
+});
+
 test("createScoreImage renders the generic date line larger and explicitly bold", () => {
   const svg = decode(createScoreImage("Home\nAway\n0 - 0\n9/14/2026"));
   assert.match(svg, /y="178"[^>]*font-size="19"[^>]*font-weight="700"[^>]*>9\/14\/2026<\/text>/);
@@ -82,6 +116,34 @@ test("createScoreImage bounds visibly estimated match phases in the lower row", 
 test("createScoreImage ignores non-image crest data", () => {
   const svg = decode(createScoreImage("Home\nAway\n0 - 0\n2026-09-14", { homeCrest: "javascript:alert(1)" }));
   assert.doesNotMatch(svg, /<image /);
+});
+
+test("createScoreImage accepts canonical Base64 and rejects malformed crest payloads", () => {
+  for (const payload of ["YWJj", "YWI=", "YQ==", "aG9tZQ=="]) {
+    const crest = `data:image/png;base64,${payload}`;
+    const svg = decode(createScoreImage("Home\nAway\n0 - 0", { homeCrest: crest, assignedTeamSide: "home" }));
+    assert.equal((svg.match(/<image /g) || []).length, 1, payload);
+    assert.match(svg, /Assigned home team/, payload);
+  }
+
+  for (const payload of ["====", "a", "abc", "YQ=", "YQ===", "YW=J", "YWJj=", "YW$j", ""]) {
+    const crest = `data:image/png;base64,${payload}`;
+    const svg = decode(createScoreImage("Home\nAway\n0 - 0", { homeCrest: crest, assignedTeamSide: "home" }));
+    assert.doesNotMatch(svg, /<image /, payload);
+    assert.doesNotMatch(svg, /Assigned home team/, payload);
+  }
+});
+
+test("a malformed opposite crest does not suppress a valid selected crest indicator", () => {
+  const svg = decode(createScoreImage("Home\nAway\n0 - 0", {
+    homeCrest: "data:image/png;base64,aG9tZQ==",
+    awayCrest: "data:image/png;base64,====",
+    assignedTeamSide: "home",
+  }));
+
+  assert.equal((svg.match(/<image /g) || []).length, 1);
+  assert.equal((svg.match(/Assigned (?:home|away) team/g) || []).length, 1);
+  assert.match(svg, /Assigned home team/);
 });
 
 test("createScoreImage preserves supplied LIVE text without adding a duplicate badge", () => {
