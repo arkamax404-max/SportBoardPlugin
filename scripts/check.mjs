@@ -37,7 +37,14 @@ const EXPECTED_CONTROLLERS = ["Keypad"];
 const EXPECTED_DEVICES = ["D200"];
 const EXPECTED_STATE_NAMES = ["Ready", "Selected"];
 const EXPECTED_AUTHOR = "Santiago Pérez";
-const EXPECTED_VERSION = "0.14.2";
+const EXPECTED_VERSION = "0.14.3";
+const EXPECTED_STORE_KEYS = ["cover", "screenshots", "longDescription", "deviceTypes", "tags"];
+const EXPECTED_STORE_PATHS = {
+  cover: "assets/cover.png",
+  screenshots: ["assets/banner.png"],
+};
+const ALLOWED_STORE_DEVICE_TYPES = new Set(["deck", "dial"]);
+const EXPECTED_STORE_DEVICE_TYPES = ["deck"];
 const EXPECTED_PUBLICATION_METADATA = {
   Description: "Football match scores and fixtures for your Ulanzi D200.",
   Detail:
@@ -120,6 +127,51 @@ export function validatePackageJson(packageJson, manifest) {
   }
   if (packageJson.author !== EXPECTED_AUTHOR) {
     defects.push(defect("package.json", "package.author", `author must be exactly ${EXPECTED_AUTHOR}`));
+  }
+  return defects;
+}
+
+export function validateStoreJson(store) {
+  const defects = [];
+  const keys = isPlainObject(store) ? Object.keys(store) : [];
+  if (!deepEquals(keys, EXPECTED_STORE_KEYS)) {
+    defects.push(
+      defect(
+        "store.json",
+        "store.keys",
+        `fields must be exactly ${EXPECTED_STORE_KEYS.join(", ")} in order`,
+      ),
+    );
+  }
+  for (const [key, expected] of Object.entries(EXPECTED_STORE_PATHS)) {
+    if (!deepEquals(store?.[key], expected)) {
+      defects.push(
+        defect("store.json", `store.${key}`, `${key} must be exactly ${JSON.stringify(expected)}`),
+      );
+    }
+  }
+  const deviceTypes = store?.deviceTypes;
+  const hasValidDomain =
+    Array.isArray(deviceTypes) &&
+    deviceTypes.length > 0 &&
+    deviceTypes.every((value) => typeof value === "string" && ALLOWED_STORE_DEVICE_TYPES.has(value)) &&
+    new Set(deviceTypes).size === deviceTypes.length;
+  if (!hasValidDomain) {
+    defects.push(
+      defect(
+        "store.json",
+        "store.device-types-domain",
+        'deviceTypes must be a non-empty array of unique values from "deck" and "dial"',
+      ),
+    );
+  } else if (!deepEquals(deviceTypes, EXPECTED_STORE_DEVICE_TYPES)) {
+    defects.push(
+      defect(
+        "store.json",
+        "store.device-types",
+        `deviceTypes must be exactly ${JSON.stringify(EXPECTED_STORE_DEVICE_TYPES)} for this plugin`,
+      ),
+    );
   }
   return defects;
 }
@@ -402,16 +454,22 @@ export function collectDefects({
 } = {}) {
   const defects = [];
   const packageText = readText(join(root, "package.json"));
+  const storeText = readText(join(root, "store.json"));
   const manifestText = readText(join(packageRoot, "manifest.json"));
   if (packageText === null) defects.push(defect("package.json", "file-missing", "package.json is missing"));
+  if (storeText === null) defects.push(defect("store.json", "file-missing", "store.json is missing"));
   if (manifestText === null) defects.push(defect("manifest.json", "file-missing", "manifest.json is missing"));
   const packageParsed = packageText === null ? null : parseJsonFile("package.json", packageText);
+  const storeParsed = storeText === null ? null : parseJsonFile("store.json", storeText);
   const manifestParsed = manifestText === null ? null : parseJsonFile("manifest.json", manifestText);
   if (packageParsed?.defect) defects.push(packageParsed.defect);
+  if (storeParsed?.defect) defects.push(storeParsed.defect);
   if (manifestParsed?.defect) defects.push(manifestParsed.defect);
   const packageJson = packageParsed?.value;
+  const store = storeParsed?.value;
   const manifest = manifestParsed?.value;
   if (packageJson) defects.push(...validatePackageJson(packageJson, manifest));
+  if (store) defects.push(...validateStoreJson(store));
   if (manifest) {
     defects.push(...validateManifest(manifest));
     const fs = nodeFsAdapter(packageRoot);

@@ -58,7 +58,7 @@ function baseManifest() {
     Icon: "assets/plugin.png",
     CategoryIcon: "assets/plugin.png",
     Banner: ["assets/banners/banner.png"],
-    Version: "0.14.2",
+    Version: "0.14.3",
     CodePath: "dist/main.js",
     Type: "JavaScript",
     UUID: PLUGIN_UUID,
@@ -99,6 +99,16 @@ function basePackageJson(manifest = baseManifest()) {
   };
 }
 
+function baseStoreJson() {
+  return {
+    cover: "assets/cover.png",
+    screenshots: ["assets/banner.png"],
+    longDescription: "Store detail",
+    deviceTypes: ["deck"],
+    tags: ["football", "scores", "fixtures"],
+  };
+}
+
 // Read-only filesystem adapter over in-memory directories and file heads.
 function memoryFs(directories, fileHeads) {
   const has = (map, key) => Object.prototype.hasOwnProperty.call(map, key);
@@ -131,27 +141,73 @@ function rulesOf(defects) {
   return defects.map((item) => item.rule);
 }
 
-test("package.json and manifest.json must parse", async () => {
+test("package.json, store.json and manifest.json must parse", async () => {
   const { parseJsonFile } = await loadCheck();
   assert.deepEqual(parseJsonFile("package.json", "{}\n").value, {});
+  assert.deepEqual(parseJsonFile("store.json", '{"deviceTypes":["deck"]}\n').value, { deviceTypes: ["deck"] });
   const broken = parseJsonFile("package.json", "{ not json");
   assert.equal(broken.defect.rule, "json-parse");
   assert.equal(broken.defect.path, "package.json");
 });
 
-test("a fully valid package metadata and manifest yield no defects", async () => {
-  const { validateManifest, validatePackageJson, validateAssets, validateGeneratedIcons, validatePackageStructure } =
-    await loadCheck();
+test("a fully valid package metadata, store metadata and manifest yield no defects", async () => {
+  const {
+    validateManifest,
+    validatePackageJson,
+    validateStoreJson,
+    validateAssets,
+    validateGeneratedIcons,
+    validatePackageStructure,
+  } = await loadCheck();
   const manifest = baseManifest();
   const fs = await baseFs();
   const defects = [
     ...validatePackageJson(basePackageJson(manifest), manifest),
+    ...validateStoreJson(baseStoreJson()),
     ...validateManifest(manifest),
     ...validateAssets(manifest, fs),
     ...validateGeneratedIcons(fs),
     ...validatePackageStructure(fs),
   ];
   assert.deepEqual(defects, []);
+});
+
+test("store metadata pins key order and publication image paths", async () => {
+  const { validateStoreJson } = await loadCheck();
+
+  const reordered = baseStoreJson();
+  delete reordered.cover;
+  reordered.cover = "assets/cover.png";
+  assert.deepEqual(rulesOf(validateStoreJson(reordered)), ["store.keys"]);
+
+  const extra = baseStoreJson();
+  extra.other = true;
+  assert.deepEqual(rulesOf(validateStoreJson(extra)), ["store.keys"]);
+
+  const wrongCover = baseStoreJson();
+  wrongCover.cover = "assets/other-cover.png";
+  assert.deepEqual(rulesOf(validateStoreJson(wrongCover)), ["store.cover"]);
+
+  const wrongScreenshots = baseStoreJson();
+  wrongScreenshots.screenshots = ["assets/other-banner.png"];
+  assert.deepEqual(rulesOf(validateStoreJson(wrongScreenshots)), ["store.screenshots"]);
+});
+
+test("store device types use the closed form-factor domain and exactly deck for this plugin", async () => {
+  const { validateStoreJson } = await loadCheck();
+  const cases = [
+    [["D200"], "store.device-types-domain"],
+    [["screen"], "store.device-types-domain"],
+    [["deck", "deck"], "store.device-types-domain"],
+    [[], "store.device-types-domain"],
+    [["dial"], "store.device-types"],
+    [["deck", "dial"], "store.device-types"],
+  ];
+  for (const [deviceTypes, rule] of cases) {
+    const store = baseStoreJson();
+    store.deviceTypes = deviceTypes;
+    assert.deepEqual(rulesOf(validateStoreJson(store)), [rule], JSON.stringify(deviceTypes));
+  }
 });
 
 test("manifest field gate: missing, unknown and forbidden keys are rejected", async () => {
@@ -252,11 +308,11 @@ test("package metadata gate: version drift, engines, scripts and dependency sets
   assert.deepEqual(rulesOf(validatePackageJson(withDependency, manifest)), ["package.dependencies"]);
 });
 
-test("release metadata is pinned to version 0.14.2 and the official author", () => {
+test("release metadata is pinned to version 0.14.3 and the official author", () => {
   const packageJson = JSON.parse(repoRead("package.json"));
   const manifest = JSON.parse(repoRead("com.ulanzi.sportboard.ulanziPlugin/manifest.json"));
-  assert.equal(packageJson.version, "0.14.2");
-  assert.equal(manifest.Version, "0.14.2");
+  assert.equal(packageJson.version, "0.14.3");
+  assert.equal(manifest.Version, "0.14.3");
   assert.equal(packageJson.author, "Santiago Pérez");
   assert.equal(manifest.Author, "Santiago Pérez");
 });
