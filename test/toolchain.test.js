@@ -761,7 +761,8 @@ const README_ANCHORS = [
   "not affiliated",
   "Windows 10 or later",
   "macOS 12 or later",
-  "pending physical validation",
+  "One local installation has been verified on macOS",
+  "~/Library/Application Support/Ulanzi/UlanziDeck/Plugins",
   "LIVE",
   "played by the computer",
 ];

@@ -46,6 +46,7 @@ test("Windows playback uses an absolute trusted command and a child-only sound e
     stdio: "ignore",
     env: { ...env, [WINDOWS_SOUND_ENV]: soundPath },
   });
+  assert.ok(nodePath.win32.isAbsolute(h.calls[0].options.env[WINDOWS_SOUND_ENV]));
   assert.equal(env[WINDOWS_SOUND_ENV], undefined, "the injected parent environment is not mutated");
 });
 

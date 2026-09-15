@@ -21,7 +21,7 @@ An unofficial Ulanzi Studio plugin for the **Ulanzi D200** that displays the foo
 
 - Ulanzi Studio with a D200 device.
 - Windows 10 or later.
-- macOS 12 or later is declared compatible but is pending physical validation; it has not yet been tested on macOS hardware.
+- macOS 12 or later. One local installation has been verified on macOS; broader macOS hardware and version coverage is not yet established.
 - Node.js 20 or later for development.
 - A football-data.org API token. Availability of competitions and fixtures depends on the account's plan.
 
@@ -37,6 +37,12 @@ Typical Windows plugin directory:
 
 ```text
 %APPDATA%\Ulanzi\UlanziDeck\Plugins
+```
+
+Typical macOS plugin directory:
+
+```text
+~/Library/Application Support/Ulanzi/UlanziDeck/Plugins
 ```
 
 ## Behavior

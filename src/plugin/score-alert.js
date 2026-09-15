@@ -31,7 +31,8 @@ function createScoreAlertPlayer({
   env = process.env,
 } = {}) {
   if (typeof spawn !== "function") throw new TypeError("spawn must be a function");
-  const absoluteSoundPath = nodePath.isAbsolute(soundPath) ? soundPath : nodePath.resolve(soundPath);
+  const platformPath = platform === "win32" ? nodePath.win32 : nodePath.posix;
+  const absoluteSoundPath = platformPath.isAbsolute(soundPath) ? soundPath : platformPath.resolve(soundPath);
   const active = new Set();
   let disposed = false;
 
