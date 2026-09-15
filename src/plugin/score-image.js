@@ -11,7 +11,15 @@
 const SIZE = 196;
 const MAX_LINES = 5;
 const PROGRESS_BAR = { x: 12, y: 190, width: 172, height: 4 };
-const ASSIGNED_TEAM_INDICATOR = { y: 7, halfWidth: 16, strokeWidth: 4, color: "#d7dde5" };
+const ASSIGNED_TEAM_INDICATOR = { y: 14, halfWidth: 16, strokeWidth: 4, color: "#d7dde5" };
+// Panels must read as raised surfaces against the #101820 key background, so the
+// fill is deliberately about twice the background luminance and the border is
+// lighter still to keep a visible edge on a small, low-contrast D200 display.
+const PANEL = { fill: "#223040", stroke: "#3d5063", radius: 10 };
+// Conservatively estimate bold Arial labels before forcing them into the
+// 80px usable panel width. The bound is exact; this factor only decides when
+// to apply it and intentionally exceeds the measured reference factor (~0.648).
+const PANEL_TEAM = { innerWidth: 80, charWidthFactor: 0.7 };
 
 // Four-row match layout: home team, away team, result, date. The result row is
 // the visual anchor, so it is larger and coloured; the date row is deliberately
@@ -48,19 +56,28 @@ function lowerRowFit(line) {
   return needsFit ? ' textLength="168" lengthAdjust="spacingAndGlyphs"' : "";
 }
 
+function matchPanels() {
+  const panel = (label, x, y, width, height) => `<g aria-label="${label}"><rect x="${x}" y="${y}" width="${width}" height="${height}" rx="${PANEL.radius}" fill="${PANEL.fill}" stroke="${PANEL.stroke}" stroke-width="1"/></g>`;
+  return `${panel("Home team panel", 6, 8, 88, 90)}${panel("Away team panel", 102, 8, 88, 90)}${panel("Score panel", 6, 104, 184, 48)}`;
+}
+
 function crestMatchBody(lines, { homeCrest, awayCrest }) {
   const image = (data, x) => isEmbeddedImage(data)
-    ? `<image x="${x}" y="12" width="48" height="48" preserveAspectRatio="xMidYMid meet" href="${escapeXml(data)}"/>`
+    ? `<image x="${x}" y="20" width="48" height="48" preserveAspectRatio="xMidYMid meet" href="${escapeXml(data)}"/>`
     : "";
   const team = (label, x) => {
     const fontSize = label.length > 13 ? 11 : label.length > 9 ? 12 : 14;
-    return `<text x="${x}" y="82" fill="#ffffff" font-family="Arial, sans-serif" font-size="${fontSize}" font-weight="700" text-anchor="middle">${escapeXml(label)}</text>`;
+    const estimated = label.length * fontSize * PANEL_TEAM.charWidthFactor;
+    const fit = estimated > PANEL_TEAM.innerWidth
+      ? ` textLength="${PANEL_TEAM.innerWidth}" lengthAdjust="spacingAndGlyphs"`
+      : "";
+    return `<text x="${x}" y="88" fill="#ffffff" font-family="Arial, sans-serif" font-size="${fontSize}" font-weight="700" text-anchor="middle"${fit}>${escapeXml(label)}</text>`;
   };
-  const result = `<text x="98" y="134" fill="#8ee7ff" font-family="Arial, sans-serif" font-size="40" font-weight="700" text-anchor="middle">${escapeXml(lines[2] ?? "-")}</text>`;
+  const result = `<text x="98" y="140" fill="#8ee7ff" font-family="Arial, sans-serif" font-size="40" font-weight="700" text-anchor="middle">${escapeXml(lines[2] ?? "-")}</text>`;
   const date = lines[3]
     ? `<text x="98" y="178" fill="#9aa4b2" font-family="Arial, sans-serif" font-size="19" font-weight="700" text-anchor="middle"${lowerRowFit(lines[3])}>${escapeXml(lines[3])}</text>`
     : "";
-  return `${image(homeCrest, 20)}${image(awayCrest, 128)}${team(lines[0] ?? "Home", 44)}${team(lines[1] ?? "Away", 152)}${result}${date}`;
+  return `${image(homeCrest, 26)}${image(awayCrest, 122)}${team(lines[0] ?? "Home", 50)}${team(lines[1] ?? "Away", 146)}${result}${date}`;
 }
 
 /** @typedef {null | "home" | "away" | "both"} GoalSide */
@@ -70,7 +87,7 @@ function assignedTeamIndicator(side, { homeCrest, awayCrest }) {
   if (side !== "home" && side !== "away") return "";
   const crest = side === "home" ? homeCrest : awayCrest;
   if (!isEmbeddedImage(crest)) return "";
-  const center = side === "home" ? 44 : 152;
+  const center = side === "home" ? 50 : 146;
   const label = side === "home" ? "Assigned home team" : "Assigned away team";
   return `<g aria-label="${label}"><line x1="${center - ASSIGNED_TEAM_INDICATOR.halfWidth}" y1="${ASSIGNED_TEAM_INDICATOR.y}" x2="${center + ASSIGNED_TEAM_INDICATOR.halfWidth}" y2="${ASSIGNED_TEAM_INDICATOR.y}" stroke="${ASSIGNED_TEAM_INDICATOR.color}" stroke-width="${ASSIGNED_TEAM_INDICATOR.strokeWidth}" stroke-linecap="round"/></g>`;
 }
@@ -78,10 +95,10 @@ function assignedTeamIndicator(side, { homeCrest, awayCrest }) {
 function goalMarkers(goalSide) {
   const marker = (side) => {
     const home = side === "home";
-    const x = home ? 4 : 150;
-    const textX = home ? 25 : 171;
+    const x = home ? 10 : 144;
+    const textX = home ? 31 : 165;
     const label = home ? "Home team goal increase" : "Away team goal increase";
-    return `<g aria-label="${label}"><rect x="${x}" y="110" width="42" height="22" rx="11" fill="#d71920" stroke="#ffffff" stroke-width="1"/><text x="${textX}" y="125" fill="#ffffff" font-family="Arial, sans-serif" font-size="11" font-weight="700" text-anchor="middle">Goal!!</text></g>`;
+    return `<g aria-label="${label}"><rect x="${x}" y="117" width="42" height="22" rx="11" fill="#d71920" stroke="#ffffff" stroke-width="1"/><text x="${textX}" y="132" fill="#ffffff" font-family="Arial, sans-serif" font-size="11" font-weight="700" text-anchor="middle">Goal!!</text></g>`;
   };
   if (goalSide === "both") return `${marker("home")}${marker("away")}`;
   if (goalSide === "home" || goalSide === "away") return marker(goalSide);
@@ -105,6 +122,7 @@ function createScoreImage(text, options = {}) {
     .slice(0, MAX_LINES);
   if (lines.length === 0) return null;
   const hasCrest = isEmbeddedImage(options.homeCrest) || isEmbeddedImage(options.awayCrest);
+  const panels = hasCrest ? matchPanels() : "";
   const body = hasCrest
     ? crestMatchBody(lines, options)
     : lines.map((line, index) => {
@@ -114,7 +132,7 @@ function createScoreImage(text, options = {}) {
   const assignedTeam = assignedTeamIndicator(options.assignedTeamSide, options);
   const markers = goalMarkers(options.goalSide);
   const progress = refreshProgressBar(options.refreshProgress);
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="${SIZE}" height="${SIZE}" viewBox="0 0 ${SIZE} ${SIZE}"><rect width="${SIZE}" height="${SIZE}" rx="12" fill="#101820"/>${body}${assignedTeam}${markers}${progress}</svg>`;
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="${SIZE}" height="${SIZE}" viewBox="0 0 ${SIZE} ${SIZE}"><rect width="${SIZE}" height="${SIZE}" rx="12" fill="#101820"/>${panels}${body}${assignedTeam}${markers}${progress}</svg>`;
   return `data:image/svg+xml;base64,${Buffer.from(svg, "utf8").toString("base64")}`;
 }
 
