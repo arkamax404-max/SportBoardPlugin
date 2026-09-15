@@ -7,7 +7,7 @@
   "Icon": "assets/plugin.png",
   "CategoryIcon": "assets/plugin.png",
   "Banner": ["assets/banners/banner.png"],
-  "Version": "0.14.4",
+  "Version": "0.14.5",
   "CodePath": "dist/main.js",
   "Type": "JavaScript",
   "UUID": "com.ulanzi.ulanzistudio.sportboard",

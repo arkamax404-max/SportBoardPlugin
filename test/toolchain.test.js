@@ -58,7 +58,7 @@ function baseManifest() {
     Icon: "assets/plugin.png",
     CategoryIcon: "assets/plugin.png",
     Banner: ["assets/banners/banner.png"],
-    Version: "0.14.4",
+    Version: "0.14.5",
     CodePath: "dist/main.js",
     Type: "JavaScript",
     UUID: PLUGIN_UUID,
@@ -308,11 +308,11 @@ test("package metadata gate: version drift, engines, scripts and dependency sets
   assert.deepEqual(rulesOf(validatePackageJson(withDependency, manifest)), ["package.dependencies"]);
 });
 
-test("release metadata is pinned to version 0.14.4 and the official author", () => {
+test("release metadata is pinned to version 0.14.5 and the official author", () => {
   const packageJson = JSON.parse(repoRead("package.json"));
   const manifest = JSON.parse(repoRead("com.ulanzi.sportboard.ulanziPlugin/manifest.json"));
-  assert.equal(packageJson.version, "0.14.4");
-  assert.equal(manifest.Version, "0.14.4");
+  assert.equal(packageJson.version, "0.14.5");
+  assert.equal(manifest.Version, "0.14.5");
   assert.equal(packageJson.author, "Santiago Pérez");
   assert.equal(manifest.Author, "Santiago Pérez");
 });
