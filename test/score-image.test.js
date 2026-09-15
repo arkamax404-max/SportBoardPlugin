@@ -71,6 +71,14 @@ test("createScoreImage bounds long live clock text in the existing lower row", (
   assert.equal((crests.match(/<image /g) || []).length, 2);
 });
 
+test("createScoreImage bounds visibly estimated match phases in the lower row", () => {
+  for (const phase of ["~1ST HALF 44'", "~HALF TIME", "~2ND HALF 90'"]) {
+    const svg = decode(createScoreImage(`Home\nAway\n2 - 2\n${phase}`));
+    assert.match(svg, /y="178"[^>]*textLength="168" lengthAdjust="spacingAndGlyphs"/);
+    assert.ok(svg.includes(phase.replace("'", "&apos;")));
+  }
+});
+
 test("createScoreImage ignores non-image crest data", () => {
   const svg = decode(createScoreImage("Home\nAway\n0 - 0\n2026-09-14", { homeCrest: "javascript:alert(1)" }));
   assert.doesNotMatch(svg, /<image /);
@@ -146,6 +154,25 @@ test("createScoreImage keeps goal badges outside the centered single-digit score
   assert.equal((svg.match(/<text x="(?:25|171)" y="125"[^>]*>Goal!!<\/text>/g) || []).length, 2);
   assert.match(svg, /<text x="98" y="132"[^>]*font-size="40"[^>]*>9 - 9<\/text>/);
   assert.match(svg, /y="178"[^>]*>LIVE<\/text>/);
+});
+
+test("createScoreImage renders bounded remaining-refresh progress along the bottom edge", () => {
+  for (const [progress, expectedWidth] of [[1, 172], [0.5, 86], [0, 0], [2, 172], [-1, 0]]) {
+    const svg = decode(createScoreImage("Home\nAway\n1 - 0\nLIVE", { refreshProgress: progress }));
+    const bars = [...svg.matchAll(/<rect x="12" y="190" width="([0-9.]+)" height="4" rx="2"/g)];
+    assert.equal(bars.length, 2, String(progress));
+    assert.equal(Number(bars[0][1]), 172, "the track remains within the 196x196 image");
+    assert.equal(Number(bars[1][1]), expectedWidth, String(progress));
+    for (const bar of bars) {
+      assert.ok(12 + Number(bar[1]) <= 196);
+      assert.ok(190 + 4 <= 196);
+    }
+  }
+
+  for (const progress of [undefined, null, "1", Number.NaN]) {
+    const svg = decode(createScoreImage("Home\nAway\n1 - 0", { refreshProgress: progress }));
+    assert.doesNotMatch(svg, /Automatic refresh time remaining/, String(progress));
+  }
 });
 
 test("createScoreImage keeps at most five meaningful lines", () => {

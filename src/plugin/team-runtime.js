@@ -10,6 +10,7 @@ const DEFAULT_COMPETITION = "PD";
 const DEFAULT_TEAM_ID = 90;
 const DEFAULT_TEAM_LABEL = "Betis";
 const POLL_INTERVAL_MS = 120000;
+const PROGRESS_UPDATE_MS = 1000;
 const MAX_TIMEOUT_MS = 0x7fffffff;
 const LIVE_STATUSES = new Set(["IN_PLAY", "PAUSED", "LIVE"]);
 const SCHEDULED_STATUSES = new Set(["SCHEDULED", "TIMED"]);
@@ -268,20 +269,33 @@ function mergeMatchDetail(match, detail) {
   return Object.freeze(merged);
 }
 
-function describeLiveMatch(match) {
+function describeLiveMatch(match, reference) {
   const status = typeof match?.status === "string" ? match.status.toUpperCase() : "";
   if (!LIVE_STATUSES.has(status)) return null;
 
   const minute = matchClockValue(match?.minute);
   if (status === "PAUSED" && minute === null) return "HALF TIME";
-  if (minute === null) return "LIVE";
+  if (minute !== null) {
+    const injuryTime = matchClockValue(match?.injuryTime);
+    const clock = `${minute}${injuryTime !== null && injuryTime > 0 ? `+${injuryTime}` : ""}'`;
+    if (status === "PAUSED") return `HALF TIME ${clock}`;
+    if (minute <= 45) return `1ST HALF ${clock}`;
+    if (minute <= 90) return `2ND HALF ${clock}`;
+    return `EXTRA TIME ${clock}`;
+  }
 
-  const injuryTime = matchClockValue(match?.injuryTime);
-  const clock = `${minute}${injuryTime !== null && injuryTime > 0 ? `+${injuryTime}` : ""}'`;
-  if (status === "PAUSED") return `HALF TIME ${clock}`;
-  if (minute <= 45) return `1ST HALF ${clock}`;
-  if (minute <= 90) return `2ND HALF ${clock}`;
-  return `EXTRA TIME ${clock}`;
+  const kickoff = kickoffTime(match);
+  if (kickoff === null || !(reference instanceof Date) || Number.isNaN(reference.getTime())) return "LIVE";
+  const elapsed = reference.getTime() - kickoff;
+  if (elapsed < 0) {
+    if (!sameLocalCalendarDate(new Date(kickoff), reference)) return formatLocalMatchDate(match);
+    const minutes = Math.ceil(-elapsed / 60000);
+    return `START IN ${String(Math.floor(minutes / 60)).padStart(2, "0")}:${String(minutes % 60).padStart(2, "0")}`;
+  }
+  const elapsedMinutes = Math.floor(elapsed / 60000);
+  if (elapsedMinutes < 45) return `~1ST HALF ${elapsedMinutes}'`;
+  if (elapsedMinutes < 60) return "~HALF TIME";
+  return `~2ND HALF ${Math.min(90, elapsedMinutes - 15)}'`;
 }
 
 function scoreOf(match) {
@@ -320,9 +334,8 @@ function contextualMatchDate(event, reference) {
   const status = typeof event?.status === "string" ? event.status.toUpperCase() : "";
   const scheduled = describeScheduledMatch(event, reference);
   if (scheduled !== null) return scheduled.text;
+  if (LIVE_STATUSES.has(status)) return describeLiveMatch(event, reference);
   if (!sameLocalCalendarDate(new Date(time), reference)) return formatLocalMatchDate(event);
-
-  if (LIVE_STATUSES.has(status)) return describeLiveMatch(event);
   if (status === "FINISHED") return "FINISHED";
   return formatLocalMatchDate(event);
 }
@@ -344,6 +357,8 @@ class TeamRuntime {
   #now;
   #setTimeout;
   #clearTimeout;
+  #setProgressTimeout;
+  #clearProgressTimeout;
   #maxTimeout;
   #alert;
   #contexts = new Map();
@@ -355,12 +370,14 @@ class TeamRuntime {
     now = () => new Date(),
     setTimeout = globalThis.setTimeout,
     clearTimeout = globalThis.clearTimeout,
+    setProgressTimeout = setTimeout,
+    clearProgressTimeout = clearTimeout,
     maxTimeout = MAX_TIMEOUT_MS,
     alert = () => {},
   } = {}) {
     if (!host || typeof host.setBaseDataIcon !== "function") throw new TypeError("host must implement setBaseDataIcon");
     if (!service || typeof service.listMatches !== "function") throw new TypeError("service must implement listMatches");
-    if (typeof render !== "function" || typeof now !== "function" || typeof setTimeout !== "function" || typeof clearTimeout !== "function" || typeof alert !== "function") {
+    if (typeof render !== "function" || typeof now !== "function" || typeof setTimeout !== "function" || typeof clearTimeout !== "function" || typeof setProgressTimeout !== "function" || typeof clearProgressTimeout !== "function" || typeof alert !== "function") {
       throw new TypeError("render, alert, clock and timers must be functions");
     }
     if (!Number.isFinite(maxTimeout) || maxTimeout <= 0) throw new TypeError("maxTimeout must be positive");
@@ -370,6 +387,8 @@ class TeamRuntime {
     this.#now = now;
     this.#setTimeout = setTimeout;
     this.#clearTimeout = clearTimeout;
+    this.#setProgressTimeout = setProgressTimeout;
+    this.#clearProgressTimeout = clearProgressTimeout;
     this.#maxTimeout = maxTimeout;
     this.#alert = alert;
   }
@@ -382,6 +401,7 @@ class TeamRuntime {
   #replaceContext(context, param, { resetMode, viewMode } = {}) {
     const prior = this.#contexts.get(context);
     if (prior?.timer !== null && prior?.timer !== undefined) this.#clearTimeout(prior.timer);
+    if (prior?.progressTimer !== null && prior?.progressTimer !== undefined) this.#clearProgressTimeout(prior.progressTimer);
     const selection = selectionOf(param);
     const sameSelection = prior?.selection === selection;
     const nextMode = viewMode ?? (resetMode === "always" || !sameSelection ? "nearest" : prior?.viewMode ?? "nearest");
@@ -389,6 +409,7 @@ class TeamRuntime {
     const entry = {
       generation: (prior?.generation ?? 0) + 1,
       timer: null,
+      progressTimer: null,
       param,
       selection,
       viewMode: nextMode,
@@ -431,12 +452,31 @@ class TeamRuntime {
     return null;
   }
 
-  #schedulePoll(context, entry, delay) {
+  #scheduleProgressRedraw(context, entry, deadline, delay, match, options) {
+    const reference = this.#now();
+    const now = reference instanceof Date ? reference.getTime() : Number.NaN;
+    const remaining = deadline - now;
+    if (Number.isNaN(now) || remaining <= 0 || !this.#isCurrent(context, entry)) return;
+    entry.progressTimer = this.#setProgressTimeout(() => {
+      entry.progressTimer = null;
+      if (!this.#isCurrent(context, entry)) return;
+      const current = this.#now();
+      const currentTime = current instanceof Date ? current.getTime() : Number.NaN;
+      if (Number.isNaN(currentTime) || currentTime >= deadline) return;
+      this.#draw(context, renderMatch(match, current), { ...options, refreshProgress: (deadline - currentTime) / delay });
+      this.#scheduleProgressRedraw(context, entry, deadline, delay, match, options);
+    }, Math.min(PROGRESS_UPDATE_MS, remaining));
+  }
+
+  #schedulePoll(context, entry, delay, match, options) {
+    const reference = this.#now();
+    const now = reference instanceof Date ? reference.getTime() : Number.NaN;
     entry.timer = this.#setTimeout(() => {
       entry.timer = null;
       if (!this.#isCurrent(context, entry)) return undefined;
       return this.refresh({ context, param: entry.param }, { mode: "background", resetMode: "never" });
     }, delay);
+    if (!Number.isNaN(now)) this.#scheduleProgressRedraw(context, entry, now + delay, delay, match, options);
   }
 
   #scheduleLocalRedraw(context, entry, match, crests) {
@@ -540,14 +580,16 @@ class TeamRuntime {
       const goalSide = this.#observeScore(entry, match);
       entry.selectedStatus = match.status;
       entry.selectedMatchId = matchIdOf(match);
-      this.#draw(context, renderMatch(match, reference), { homeCrest, awayCrest, live: isLiveMatch(match), goalSide });
+      const text = renderMatch(match, reference);
+      const options = { homeCrest, awayCrest, live: isLiveMatch(match), goalSide };
+      const schedule = entry.viewMode !== "last" ? decideMatchSchedule(match, this.#now()) : { kind: "none" };
       if (entry.viewMode !== "last") {
-        const schedule = decideMatchSchedule(match, this.#now());
-        if (schedule.kind === "poll-in-2m") this.#schedulePoll(context, entry, schedule.delay);
+        if (schedule.kind === "poll-in-2m") this.#schedulePoll(context, entry, schedule.delay, match, { ...options, goalSide: null });
         else if (schedule.kind === "wake-at-kickoff") {
           this.#scheduleLocalRedraw(context, entry, match, { homeCrest, awayCrest });
         }
       }
+      this.#draw(context, text, schedule.kind === "poll-in-2m" ? { ...options, refreshProgress: 1 } : options);
     } catch {
       if (this.#isCurrent(context, entry)) this.#draw(context, `${label}\nData unavailable`);
     }
@@ -569,6 +611,7 @@ class TeamRuntime {
       const context = item?.context;
       const entry = this.#contexts.get(context);
       if (entry?.timer !== null && entry?.timer !== undefined) this.#clearTimeout(entry.timer);
+      if (entry?.progressTimer !== null && entry?.progressTimer !== undefined) this.#clearProgressTimeout(entry.progressTimer);
       this.#contexts.delete(context);
     }
   }
@@ -576,6 +619,7 @@ class TeamRuntime {
   dispose() {
     for (const entry of this.#contexts.values()) {
       if (entry.timer !== null && entry.timer !== undefined) this.#clearTimeout(entry.timer);
+      if (entry.progressTimer !== null && entry.progressTimer !== undefined) this.#clearProgressTimeout(entry.progressTimer);
     }
     this.#contexts.clear();
   }

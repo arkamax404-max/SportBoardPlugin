@@ -10,6 +10,7 @@
 
 const SIZE = 196;
 const MAX_LINES = 5;
+const PROGRESS_BAR = { x: 12, y: 190, width: 172, height: 4 };
 
 // Four-row match layout: home team, away team, result, date. The result row is
 // the visual anchor, so it is larger and coloured; the date row is deliberately
@@ -39,7 +40,8 @@ function isEmbeddedImage(value) {
 
 function lowerRowFit(line) {
   const needsFit = /^START IN \d{2,}:\d{2}$/.test(line)
-    || (line.length > 15 && /^(?:1ST HALF|HALF TIME|2ND HALF|EXTRA TIME) \d+(?:\+\d+)?'$/.test(line));
+    || (line.length > 15 && /^(?:1ST HALF|HALF TIME|2ND HALF|EXTRA TIME) \d+(?:\+\d+)?'$/.test(line))
+    || /^~(?:1ST HALF \d+'|HALF TIME|2ND HALF \d+')$/.test(line);
   return needsFit ? ' textLength="168" lengthAdjust="spacingAndGlyphs"' : "";
 }
 
@@ -73,7 +75,14 @@ function goalMarkers(goalSide) {
   return "";
 }
 
-/** @param {string} text @param {{ homeCrest?: string, awayCrest?: string, goalSide?: GoalSide }} options */
+function refreshProgressBar(progress) {
+  if (typeof progress !== "number" || !Number.isFinite(progress)) return "";
+  const remaining = Math.max(0, Math.min(1, progress));
+  const width = PROGRESS_BAR.width * remaining;
+  return `<g aria-label="Automatic refresh time remaining"><rect x="${PROGRESS_BAR.x}" y="${PROGRESS_BAR.y}" width="${PROGRESS_BAR.width}" height="${PROGRESS_BAR.height}" rx="2" fill="#2b3742"/><rect x="${PROGRESS_BAR.x}" y="${PROGRESS_BAR.y}" width="${width}" height="${PROGRESS_BAR.height}" rx="2" fill="#8ee7ff"/></g>`;
+}
+
+/** @param {string} text @param {{ homeCrest?: string, awayCrest?: string, goalSide?: GoalSide, refreshProgress?: number }} options */
 function createScoreImage(text, options = {}) {
   if (typeof text !== "string") return null;
   const lines = text
@@ -90,7 +99,8 @@ function createScoreImage(text, options = {}) {
       return `<text x="${SIZE / 2}" y="${y}" fill="${color}" font-family="Arial, sans-serif" font-size="${fontSize}" font-weight="700" text-anchor="middle"${index === 3 ? lowerRowFit(line) : ""}>${escapeXml(line)}</text>`;
     }).join("");
   const markers = goalMarkers(options.goalSide);
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="${SIZE}" height="${SIZE}" viewBox="0 0 ${SIZE} ${SIZE}"><rect width="${SIZE}" height="${SIZE}" rx="12" fill="#101820"/>${body}${markers}</svg>`;
+  const progress = refreshProgressBar(options.refreshProgress);
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="${SIZE}" height="${SIZE}" viewBox="0 0 ${SIZE} ${SIZE}"><rect width="${SIZE}" height="${SIZE}" rx="12" fill="#101820"/>${body}${markers}${progress}</svg>`;
   return `data:image/svg+xml;base64,${Buffer.from(svg, "utf8").toString("base64")}`;
 }
 

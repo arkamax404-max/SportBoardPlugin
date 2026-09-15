@@ -32,6 +32,8 @@ function harness({ matches = [event()], now = () => NOW, alert = () => {}, loadC
   const calls = [];
   const timers = [];
   const cleared = [];
+  const progressTimers = [];
+  const progressCleared = [];
   const rendered = [];
   const detailCalls = [];
   const service = {
@@ -53,9 +55,11 @@ function harness({ matches = [event()], now = () => NOW, alert = () => {}, loadC
     now,
     setTimeout: (callback, delay) => { const timer = { callback, delay }; timers.push(timer); return timer; },
     clearTimeout: (timer) => cleared.push(timer),
+    setProgressTimeout: (callback, delay) => { const timer = { callback, delay }; progressTimers.push(timer); return timer; },
+    clearProgressTimeout: (timer) => progressCleared.push(timer),
     maxTimeout,
   });
-  return { runtime, sent, calls, detailCalls, timers, cleared, rendered };
+  return { runtime, sent, calls, detailCalls, timers, cleared, progressTimers, progressCleared, rendered };
 }
 
 const settings = (overrides = {}) => ({
@@ -137,7 +141,7 @@ test("renderMatch uses contextual status text for today's match", () => {
   const reference = new Date(2026, 8, 14, 12);
   const cases = [
     { statuses: ["SCHEDULED", "TIMED"], expected: "START IN 08:00" },
-    { statuses: ["IN_PLAY", "LIVE"], expected: "LIVE" },
+    { statuses: ["IN_PLAY", "LIVE"], expected: "START IN 08:00" },
     { statuses: ["PAUSED"], expected: "HALF TIME" },
     { statuses: ["FINISHED"], expected: "FINISHED" },
   ];
@@ -182,6 +186,36 @@ test("describeLiveMatch safely handles missing and malformed clocks", () => {
 
   assert.equal(describeLiveMatch({ status: "FINISHED", minute: 90 }), null);
   assert.equal(describeLiveMatch({ status: "TIMED", minute: 0 }), null);
+});
+
+test("describeLiveMatch estimates bounded phases from kickoff when the official clock is unavailable", () => {
+  const kickoff = NOW.getTime();
+  const active = event({ status: "IN_PLAY", minute: null, kickoff: NOW.toISOString() });
+  const cases = [
+    { elapsed: -1, expected: "START IN 00:01" },
+    { elapsed: 0, expected: "~1ST HALF 0'" },
+    { elapsed: 45 * 60000 - 1, expected: "~1ST HALF 44'" },
+    { elapsed: 45 * 60000, expected: "~HALF TIME" },
+    { elapsed: 60 * 60000 - 1, expected: "~HALF TIME" },
+    { elapsed: 60 * 60000, expected: "~2ND HALF 45'" },
+    { elapsed: 3 * 60 * 60000, expected: "~2ND HALF 90'" },
+  ];
+
+  for (const { elapsed, expected } of cases) {
+    assert.equal(describeLiveMatch(active, new Date(kickoff + elapsed)), expected, String(elapsed));
+  }
+});
+
+test("official clock and period data take precedence over kickoff estimates", () => {
+  const afterRegulation = new Date(NOW.getTime() + 3 * 60 * 60000);
+  assert.equal(describeLiveMatch(event({ status: "IN_PLAY", minute: 67, kickoff: NOW.toISOString() }), afterRegulation), "2ND HALF 67'");
+  assert.equal(describeLiveMatch(event({ status: "PAUSED", minute: null, kickoff: NOW.toISOString() }), afterRegulation), "HALF TIME");
+  assert.equal(renderMatch(event({ status: "IN_PLAY", minute: 67, kickoff: NOW.toISOString() }), afterRegulation).split("\n").at(-1), "2ND HALF 67'");
+  assert.equal(renderMatch(event({ status: "IN_PLAY", minute: null, kickoff: NOW.toISOString() }), afterRegulation).split("\n").at(-1), "~2ND HALF 90'");
+});
+
+test("missing clocks with invalid kickoff data retain the generic live fallback", () => {
+  assert.equal(describeLiveMatch(event({ status: "LIVE", minute: null, kickoff: "invalid" }), NOW), "LIVE");
 });
 
 test("renderMatch places the derived live clock in the existing lower row", () => {
@@ -535,8 +569,8 @@ test("valid detail replaces LIVE with its clock and score while preserving omitt
   assert.equal(h.timers.at(-1).delay, POLL_INTERVAL_MS);
 });
 
-test("unavailable, failed, malformed and mismatched detail keep the list LIVE fallback and polling", async () => {
-  const listMatch = event({ id: "42", status: "IN_PLAY", minute: null, injuryTime: null, homeScore: 1, awayScore: 1 });
+test("unavailable, failed, malformed and mismatched detail estimate the active phase and keep polling", async () => {
+  const listMatch = event({ id: "42", status: "IN_PLAY", minute: null, injuryTime: null, homeScore: 1, awayScore: 1, kickoff: "2026-09-14T17:30:00Z" });
   const cases = [
     { name: "unavailable" },
     { name: "failed", loadMatchDetail: async () => { throw new Error("detail failed"); } },
@@ -549,7 +583,7 @@ test("unavailable, failed, malformed and mismatched detail keep the list LIVE fa
   for (const item of cases) {
     const h = harness({ matches: [listMatch], loadMatchDetail: item.loadMatchDetail });
     await h.runtime.refresh(settings());
-    assert.equal(h.rendered.at(-1).text.split("\n").at(-1), "LIVE", item.name);
+    assert.equal(h.rendered.at(-1).text.split("\n").at(-1), "~1ST HALF 30'", item.name);
     assert.match(h.rendered.at(-1).text, /1 - 1/, item.name);
     assert.doesNotMatch(h.sent.at(-1).data, /Data unavailable/, item.name);
     assert.equal(h.timers.length, 1, item.name);
@@ -558,7 +592,7 @@ test("unavailable, failed, malformed and mismatched detail keep the list LIVE fa
 });
 
 test("same-ID unsupported status and conflicting teams reject the whole detail", async () => {
-  const listMatch = event({ id: "42", status: "IN_PLAY", minute: null, homeScore: 1, awayScore: 1 });
+  const listMatch = event({ id: "42", status: "IN_PLAY", minute: null, homeScore: 1, awayScore: 1, kickoff: "2026-09-14T17:30:00Z" });
   const h = harness({
     matches: [listMatch],
     loadMatchDetail: async () => ({
@@ -576,7 +610,7 @@ test("same-ID unsupported status and conflicting teams reject the whole detail",
 
   await h.runtime.refresh(settings());
 
-  assert.equal(h.rendered.at(-1).text, "Real Betis\nSevilla FC\n1 - 1\nLIVE");
+  assert.equal(h.rendered.at(-1).text, "Real Betis\nSevilla FC\n1 - 1\n~1ST HALF 30'");
   assert.equal(h.rendered.at(-1).options.live, true);
   assert.equal(h.rendered.at(-1).options.goalSide, null);
   assert.equal(h.timers.length, 1);
@@ -827,6 +861,106 @@ test("an active match polls once after exactly two minutes", async () => {
   await h.timers[0].callback();
   assert.equal(h.calls.length, 2);
   assert.equal(h.timers.length, 2, "the completed poll schedules one next one-shot timer");
+});
+
+test("automatic polling draws local remaining-time progress without provider or side effects", async () => {
+  let nowMs = NOW.getTime();
+  const crestLoads = [];
+  const alerts = [];
+  const h = harness({
+    matches: (call) => [event({
+      status: "IN_PLAY",
+      minute: null,
+      homeScore: call === 1 ? 0 : 1,
+      awayScore: 0,
+      kickoff: new Date(NOW.getTime() - 44 * 60000).toISOString(),
+      homeCrestUrl: "home",
+      awayCrestUrl: "away",
+    })],
+    now: () => new Date(nowMs),
+    loadCrest: async (url) => { crestLoads.push(url); return `crest:${url}`; },
+    alert: () => alerts.push("play"),
+  });
+
+  await h.runtime.refresh(settings());
+  assert.equal(h.rendered[0].options, undefined, "initial loading does not expose progress");
+  assert.equal(h.rendered.at(-1).options.refreshProgress, 1);
+  assert.match(h.rendered.at(-1).text, /~1ST HALF 44'$/);
+  assert.equal(h.progressTimers[0].delay, 1000);
+
+  nowMs += POLL_INTERVAL_MS / 2;
+  await h.progressTimers[0].callback();
+  assert.equal(h.rendered.at(-1).options.refreshProgress, 0.5);
+  assert.equal(h.rendered.at(-1).options.goalSide, null);
+  assert.match(h.rendered.at(-1).text, /~HALF TIME$/, "local redraws advance estimates from the injected clock");
+  assert.equal(h.calls.length, 1, "progress redraws do not request match data");
+  assert.deepEqual(crestLoads, ["home", "away"], "progress redraws reuse captured crests");
+  assert.deepEqual(alerts, []);
+
+  await h.runtime.refresh(settings());
+  assert.deepEqual(alerts, ["play"], "progress redraws do not mutate the score baseline");
+});
+
+test("only an actual automatic poll exposes refresh progress", async () => {
+  const terminal = harness({ matches: [event({ status: "FINISHED" })] });
+  await terminal.runtime.refresh(settings());
+  assert.equal(terminal.rendered.at(-1).options.refreshProgress, undefined);
+  assert.equal(terminal.progressTimers.length, 0);
+
+  const future = harness({ matches: [event({
+    status: "TIMED",
+    kickoff: new Date(NOW.getTime() + 60000).toISOString(),
+    homeScore: null,
+    awayScore: null,
+  })] });
+  await future.runtime.refresh(settings());
+  assert.equal(future.rendered.at(-1).options.refreshProgress, undefined);
+  assert.equal(future.progressTimers.length, 0);
+
+  const modes = harness({ matches: [
+    event({ id: "last", status: "FINISHED", kickoff: "2026-09-14T17:00:00Z" }),
+    event({ id: "live", status: "IN_PLAY", kickoff: "2026-09-14T17:55:00Z" }),
+  ] });
+  await modes.runtime.refresh(settings(), { resetMode: "always" });
+  await modes.runtime.toggle({ context: "ctx" });
+  assert.equal(modes.rendered.at(-1).options.refreshProgress, undefined);
+  assert.equal(modes.progressTimers.length, 1, "last mode does not schedule progress");
+});
+
+test("progress cancellation and stale callbacks cannot draw or request data", async () => {
+  const cases = [
+    ["manual replacement", async (h) => h.runtime.refresh(settings({ competition: "PL" }))],
+    ["clear", async (h) => h.runtime.clear({ param: [{ context: "ctx" }] })],
+    ["dispose", async (h) => h.runtime.dispose()],
+  ];
+
+  for (const [name, cancel] of cases) {
+    const h = harness({ matches: (call) => [event({ status: call === 1 ? "IN_PLAY" : "FINISHED", minute: 60 })] });
+    await h.runtime.refresh(settings());
+    const progressTimer = h.progressTimers[0];
+    await cancel(h);
+    const state = { calls: h.calls.length, rendered: h.rendered.length };
+    await progressTimer.callback();
+    assert.deepEqual({ calls: h.calls.length, rendered: h.rendered.length }, state, name);
+    assert.ok(h.progressCleared.includes(progressTimer), name);
+  }
+});
+
+test("the deadline performs one provider refresh while the progress timer remains local", async () => {
+  let nowMs = NOW.getTime();
+  const h = harness({ matches: [event({ status: "IN_PLAY", minute: 60 })], now: () => new Date(nowMs) });
+  await h.runtime.refresh(settings());
+  const pollTimer = h.timers[0];
+  const progressTimer = h.progressTimers[0];
+  const renderedBeforeDeadline = h.rendered.length;
+
+  nowMs += POLL_INTERVAL_MS;
+  await progressTimer.callback();
+  assert.equal(h.calls.length, 1);
+  assert.equal(h.rendered.length, renderedBeforeDeadline);
+
+  await pollTimer.callback();
+  assert.equal(h.calls.length, 2, "the poll timer owns the only deadline request");
 });
 
 test("a local countdown tick redraws captured data without API, crest, audio or baseline work", async () => {
@@ -1103,13 +1237,14 @@ test("a stale background response cannot draw, alert, change the baseline or sch
     sent: h.sent.length,
     alerts: alerts.length,
     timers: h.timers.length,
+    progressTimers: h.progressTimers.length,
   };
 
   resolvePoll([event({ status: "IN_PLAY", homeScore: 1, awayScore: 0 })]);
   await stalePoll;
 
   assert.deepEqual(
-    { sent: h.sent.length, alerts: alerts.length, timers: h.timers.length },
+    { sent: h.sent.length, alerts: alerts.length, timers: h.timers.length, progressTimers: h.progressTimers.length },
     stateAfterForeground,
   );
   await h.runtime.refresh(settings());
