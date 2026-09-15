@@ -6,11 +6,13 @@ An unofficial Ulanzi Studio plugin for the **Ulanzi D200** that displays the foo
 
 - One independently configured team per D200 key.
 - Dynamic competition and team selectors powered by [football-data.org](https://www.football-data.org/).
-- The nearest finished or upcoming match is selected automatically; no date input is required.
-- Match-day updates every two minutes while the match is not in a terminal state.
+- The match nearest to the current time is selected automatically; no date input is required.
+- Pressing a configured key switches between the last finished match and the active match, or the next upcoming match when none is active.
+- Active matches update every two minutes; future fixtures wake locally at kickoff without early API requests.
 - Home and away crests, team names, score or kickoff time, and match date rendered on the key.
 - A static red `LIVE` badge for matches in play or paused at half-time.
 - A short score-change alert played by the computer, not by the D200.
+- A brief amber marker appears on the home, away, or both sides when that score increases.
 - Persistent selector cache with explicit on-demand refresh.
 - Durable per-key settings through the Ulanzi Studio settings API.
 - Zero runtime npm dependencies.
@@ -41,9 +43,13 @@ Typical Windows plugin directory:
 
 The plugin requests the selected team's fixtures within a bounded window around the current date and chooses the kickoff with the smallest absolute distance from now. A future fixture wins an exact tie.
 
-Automatic polling runs every two minutes only when the chosen fixture is scheduled for the current local calendar day and its status is not terminal. Future-day, finished, cancelled, postponed, suspended, and awarded fixtures are not polled. Pressing the key still triggers an immediate manual refresh.
+The initial view remains the nearest fixture. Pressing the key then alternates between the most recent `FINISHED` match and the `next` category. `next` prioritizes an active `IN_PLAY`, `PAUSED`, or `LIVE` match; only when none is active does it select the nearest future `SCHEDULED` or `TIMED` fixture. If that side of the toggle has no candidate, the key reports `No finished match` or `No upcoming match`; the next press still switches to the opposite view.
 
-The first score observed for each key and match establishes a silent baseline. Later home or away score changes for that same live match play one short computer-audio alert, including score corrections. Changing the selected team, competition, or match establishes a new silent baseline. Audio playback failure does not interrupt key updates or polling.
+Automatic polling runs every two minutes for an active `IN_PLAY`, `PAUSED`, or `LIVE` match, including across local midnight. A future `SCHEDULED` or `TIMED` fixture does not call the API periodically before kickoff: the plugin arms a local timeout for the parsed UTC kickoff instant. At kickoff it performs one background refresh; if the provider still reports `SCHEDULED` or `TIMED`, polling continues every two minutes until the status changes. Already-due scheduled/timed fixtures enter that cadence immediately. Long waits are split into safe local timeout chunks without API calls between chunks. Finished, cancelled, postponed, suspended, awarded, and other statuses schedule nothing.
+
+Scheduling compares the parsed kickoff instant and the injected/current clock as epoch milliseconds. Local timezone conversion is used only for display, never for timer decisions.
+
+The first score observed for each key and match establishes a silent baseline. Later home or away score changes for that same live match play one short computer-audio alert, including score corrections. A score increase also draws an amber geometric marker beside the corresponding home or away side for that refresh only; simultaneous increases mark both sides, while corrections do not show a marker. Changing the selected team, competition, view, or match establishes a new silent baseline. Audio playback failure does not interrupt key updates or polling.
 
 ## Privacy and security
 

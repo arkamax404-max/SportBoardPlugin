@@ -53,12 +53,12 @@ function baseManifest() {
     Name: "Sport Board",
     Description: "Football match scores and fixtures for your Ulanzi D200.",
     Detail:
-      "Sport Board displays the football match nearest to the current time for a team assigned to each Ulanzi D200 key. Select a competition and team, then view home and away crests, team names, kickoff time, score, match date, and a LIVE badge directly on the device. Match-day information refreshes every two minutes until the fixture reaches a terminal state, and pressing the key triggers a manual refresh. Score changes during live play produce a short alert on the computer. A football-data.org API token is required, and competition and fixture availability depends on the account plan.",
+      "Sport Board initially displays the football match nearest to the current time for a team assigned to each Ulanzi D200 key. Press the key to switch between the last finished match and the active match, or the next upcoming match when none is active. View home and away crests, team names, kickoff time, score, match date, a LIVE badge, and a brief amber marker beside any side whose score increased. Active matches refresh every two minutes, including across local midnight. Future scheduled and timed fixtures wake locally at the parsed UTC kickoff without early API requests, then refresh every two minutes while status updates lag. Score changes during live play produce a short alert on the computer. A football-data.org API token is required, and competition and fixture availability depends on the account plan.",
     Category: "Sports",
     Icon: "assets/plugin.png",
     CategoryIcon: "assets/plugin.png",
     Banner: ["assets/banners/banner.png"],
-    Version: "0.14.1",
+    Version: "0.14.2",
     CodePath: "dist/main.js",
     Type: "JavaScript",
     UUID: PLUGIN_UUID,
@@ -252,11 +252,11 @@ test("package metadata gate: version drift, engines, scripts and dependency sets
   assert.deepEqual(rulesOf(validatePackageJson(withDependency, manifest)), ["package.dependencies"]);
 });
 
-test("release metadata is pinned to version 0.14.1 and the official author", () => {
+test("release metadata is pinned to version 0.14.2 and the official author", () => {
   const packageJson = JSON.parse(repoRead("package.json"));
   const manifest = JSON.parse(repoRead("com.ulanzi.sportboard.ulanziPlugin/manifest.json"));
-  assert.equal(packageJson.version, "0.14.1");
-  assert.equal(manifest.Version, "0.14.1");
+  assert.equal(packageJson.version, "0.14.2");
+  assert.equal(manifest.Version, "0.14.2");
   assert.equal(packageJson.author, "Santiago Pérez");
   assert.equal(manifest.Author, "Santiago Pérez");
 });
