@@ -5,12 +5,16 @@ const { execFileSync } = require("node:child_process");
 const test = require("node:test");
 const {
   DEFAULT_TEAM_ID,
+  MAX_TIMEOUT_MS,
   POLL_INTERVAL_MS,
   TeamRuntime,
+  decideMatchSchedule,
   formatLocalKickoffTime,
   formatLocalMatchDate,
   renderMatch,
+  selectLastFinishedMatch,
   selectNearestMatch,
+  selectNextMatch,
 } = require("../src/plugin/team-runtime.js");
 
 const NOW = new Date("2026-09-14T18:00:00.000Z");
@@ -189,6 +193,71 @@ test("selectNearestMatch chooses absolute proximity and future wins a tie", () =
   assert.equal(selectNearestMatch([event({ homeTeamId: 1, awayTeamId: 2 })], NOW, 90), null);
 });
 
+test("last and next selectors are pure, status-bounded and deterministic", () => {
+  const matches = [
+    event({ id: "b", status: "FINISHED", kickoff: "2026-09-14T17:00:00Z" }),
+    event({ id: "a", status: "FINISHED", kickoff: "2026-09-14T17:00:00Z" }),
+    event({ id: "future-finished", status: "FINISHED", kickoff: "2026-09-14T19:00:00Z" }),
+    event({ id: "lowercase", status: "finished", kickoff: "2026-09-14T17:30:00Z" }),
+    event({ id: "timed", status: "TIMED", kickoff: "2026-09-14T19:00:00Z" }),
+    event({ id: "scheduled", status: "SCHEDULED", kickoff: "2026-09-14T19:00:00Z" }),
+    event({ id: "now", status: "TIMED", kickoff: NOW.toISOString() }),
+    event({ id: "invalid", status: "TIMED", kickoff: "invalid" }),
+    event({ id: "other", status: "TIMED", kickoff: "2026-09-14T18:30:00Z", homeTeamId: 1, awayTeamId: 2 }),
+  ];
+  const snapshot = [...matches];
+
+  assert.equal(selectLastFinishedMatch(matches, NOW, 90).id, "a");
+  assert.equal(selectNextMatch(matches, NOW, 90).id, "scheduled");
+  assert.deepEqual(matches, snapshot, "selectors must not reorder or mutate API results");
+  assert.equal(selectLastFinishedMatch(matches, new Date("invalid"), 90), null);
+  assert.equal(selectNextMatch(null, NOW, 90), null);
+});
+
+test("selectNextMatch prioritizes active matches and resolves anomalous multiples deterministically", () => {
+  const upcoming = event({ id: "upcoming", status: "TIMED", kickoff: "2026-09-14T18:01:00Z" });
+  const pastLive = event({ id: "past-live", status: "IN_PLAY", kickoff: "2026-09-14T17:30:00Z" });
+  assert.equal(selectNextMatch([upcoming, pastLive], NOW, 90).id, "past-live", "active outranks a closer future fixture");
+
+  const tied = [
+    event({ id: "b", status: "PAUSED", kickoff: "2026-09-14T17:00:00Z" }),
+    event({ id: "a", status: "LIVE", kickoff: "2026-09-14T19:00:00Z" }),
+  ];
+  assert.equal(selectNextMatch(tied, NOW, 90).id, "a", "equal active distance breaks by id, not array order");
+  assert.equal(selectNextMatch([...tied].reverse(), NOW, 90).id, "a");
+  assert.equal(selectNextMatch([
+    ...tied,
+    event({ id: "nearest", status: "IN_PLAY", kickoff: "2026-09-14T17:45:00Z" }),
+    event({ id: "invalid", status: "LIVE", kickoff: "invalid" }),
+    event({ id: "other", status: "LIVE", kickoff: NOW.toISOString(), homeTeamId: 1, awayTeamId: 2 }),
+  ], NOW, 90).id, "nearest");
+});
+
+test("decideMatchSchedule compares parsed UTC instants as epoch milliseconds", () => {
+  const future = "2026-09-14T18:10:00.000Z";
+  assert.deepEqual(decideMatchSchedule(event({ status: "TIMED", kickoff: future }), NOW), {
+    kind: "wake-at-kickoff",
+    kickoff: Date.parse(future),
+  });
+  assert.deepEqual(decideMatchSchedule(event({ status: "SCHEDULED", kickoff: "2026-09-14T17:59:59.999Z" }), NOW), {
+    kind: "poll-in-2m",
+    delay: POLL_INTERVAL_MS,
+  });
+  assert.deepEqual(decideMatchSchedule(event({ status: "LIVE", kickoff: "2026-09-13T23:00:00Z" }), NOW), {
+    kind: "poll-in-2m",
+    delay: POLL_INTERVAL_MS,
+  });
+  assert.deepEqual(decideMatchSchedule({ status: "TIMED", utcDate: future }, NOW), {
+    kind: "wake-at-kickoff",
+    kickoff: Date.parse(future),
+  });
+  for (const status of ["FINISHED", "CANCELLED", "POSTPONED", "SUSPENDED", "AWARDED", "UNKNOWN"]) {
+    assert.deepEqual(decideMatchSchedule(event({ status }), NOW), { kind: "none" }, status);
+  }
+  assert.deepEqual(decideMatchSchedule(event({ status: "TIMED", kickoff: "invalid" }), NOW), { kind: "none" });
+  assert.deepEqual(decideMatchSchedule(event({ status: "TIMED" }), new Date("invalid")), { kind: "none" });
+});
+
 test("TeamRuntime loads the selected team's nearest match without a configured date", async () => {
   const h = harness({ matches: [
     event({ id: "far", kickoff: "2026-09-16T20:00:00Z", date: "2026-09-16" }),
@@ -202,6 +271,90 @@ test("TeamRuntime loads the selected team's nearest match without a configured d
     { context: "ctx", data: "Betis\nLoading…" },
     { context: "ctx", data: `Real Betis\nSevilla FC\n2 - 1\n${displayedDate}` },
   ]);
+});
+
+test("TeamRuntime starts nearest and first press branches from finished, upcoming or live", async () => {
+  const cases = [
+    {
+      name: "finished",
+      matches: [
+        event({ id: "last", homeTeam: "Last Home", status: "FINISHED", kickoff: "2026-09-14T17:30:00Z" }),
+        event({ id: "next", homeTeam: "Next Home", status: "TIMED", kickoff: "2026-09-14T20:00:00Z", homeScore: null, awayScore: null }),
+      ],
+      initial: "Last Home",
+      toggled: "Next Home",
+    },
+    {
+      name: "upcoming",
+      matches: [
+        event({ id: "last", homeTeam: "Last Home", status: "FINISHED", kickoff: "2026-09-14T15:00:00Z" }),
+        event({ id: "next", homeTeam: "Next Home", status: "SCHEDULED", kickoff: "2026-09-14T18:30:00Z", homeScore: null, awayScore: null }),
+      ],
+      initial: "Next Home",
+      toggled: "Last Home",
+    },
+    {
+      name: "live",
+      matches: [
+        event({ id: "last", homeTeam: "Last Home", status: "FINISHED", kickoff: "2026-09-14T15:00:00Z" }),
+        event({ id: "live", homeTeam: "Live Home", status: "IN_PLAY", kickoff: "2026-09-14T17:55:00Z" }),
+      ],
+      initial: "Live Home",
+      toggled: "Last Home",
+    },
+  ];
+
+  for (const item of cases) {
+    const h = harness({ matches: item.matches });
+    await h.runtime.refresh(settings(), { resetMode: "always" });
+    assert.match(h.sent.at(-1).data, new RegExp(item.initial), `${item.name} initial nearest`);
+    await h.runtime.toggle({ context: "ctx" });
+    assert.match(h.sent.at(-1).data, new RegExp(item.toggled), `${item.name} first toggle`);
+    await h.runtime.toggle({ context: "ctx" });
+    assert.match(h.sent.at(-1).data, new RegExp(item.initial), `${item.name} repeated toggle returns to its category`);
+  }
+});
+
+test("TeamRuntime alternates modes, reuses settings on paramless runs and retains empty modes", async () => {
+  const matches = [
+    event({ id: "last", homeTeam: "Last Home", status: "FINISHED", kickoff: "2026-09-14T17:00:00Z" }),
+    event({ id: "next", homeTeam: "Next Home", status: "TIMED", kickoff: "2026-09-14T19:00:00Z", homeScore: null, awayScore: null }),
+  ];
+  const h = harness({ matches });
+  await h.runtime.refresh(settings(), { resetMode: "always" });
+  await h.runtime.toggle({ context: "ctx" });
+  assert.match(h.sent.at(-1).data, /Last Home/);
+  await h.runtime.toggle({ context: "ctx" });
+  assert.match(h.sent.at(-1).data, /Next Home/);
+  await h.runtime.toggle({ context: "ctx" });
+  assert.match(h.sent.at(-1).data, /Last Home/);
+  assert.deepEqual(h.calls.map((call) => call.slice(0, 3)), Array(4).fill([90, "t", "PD"]));
+
+  const empty = harness({ matches: [] });
+  await empty.runtime.refresh(settings(), { resetMode: "always" });
+  await empty.runtime.toggle({ context: "ctx" });
+  assert.equal(empty.sent.at(-1).data, "Betis\nNo finished match");
+  await empty.runtime.toggle({ context: "ctx" });
+  assert.equal(empty.sent.at(-1).data, "Betis\nNo upcoming match");
+  await empty.runtime.toggle({ context: "never-added" });
+  assert.equal(empty.sent.at(-1).data, "Betis\nAdd token");
+});
+
+test("settings reset the view to nearest and establish a silent baseline", async () => {
+  const alerts = [];
+  const matches = [
+    event({ id: "last", homeTeam: "Last Home", status: "FINISHED", kickoff: "2026-09-14T15:00:00Z" }),
+    event({ id: "live", homeTeam: "Live Home", status: "IN_PLAY", kickoff: "2026-09-14T17:55:00Z", homeScore: 2, awayScore: 0 }),
+  ];
+  const h = harness({ matches, alert: () => alerts.push("play") });
+  await h.runtime.refresh(settings(), { resetMode: "always" });
+  await h.runtime.toggle({ context: "ctx" });
+  assert.match(h.sent.at(-1).data, /Last Home/);
+  matches[1] = event({ id: "live", homeTeam: "Live Home", status: "IN_PLAY", kickoff: "2026-09-14T17:55:00Z", homeScore: 3, awayScore: 0 });
+  await h.runtime.refresh(settings(), { resetMode: "always" });
+  assert.match(h.sent.at(-1).data, /Live Home/);
+  assert.equal(h.rendered.at(-1).options.goalSide, null);
+  assert.deepEqual(alerts, []);
 });
 
 test("TeamRuntime shows kickoff time before a match and hides provider failures", async () => {
@@ -273,6 +426,24 @@ test("initial score is silent and later changes alert once, including correction
   assert.deepEqual(alerts, ["play", "play"]);
 });
 
+test("score increases mark home, away or both for one successful refresh only", async () => {
+  const sequence = [
+    event({ status: "IN_PLAY", homeScore: 0, awayScore: 0 }),
+    event({ status: "IN_PLAY", homeScore: 1, awayScore: 0 }),
+    event({ status: "IN_PLAY", homeScore: 1, awayScore: 1 }),
+    event({ status: "IN_PLAY", homeScore: 2, awayScore: 2 }),
+    event({ status: "IN_PLAY", homeScore: 2, awayScore: 2 }),
+    event({ status: "IN_PLAY", homeScore: 1, awayScore: 2 }),
+  ];
+  const h = harness({ matches: (call) => [sequence[call - 1]] });
+  const sides = [];
+  for (const _match of sequence) {
+    await h.runtime.refresh(settings());
+    sides.push(h.rendered.at(-1).options.goalSide);
+  }
+  assert.deepEqual(sides, [null, "home", "away", "both", null, null]);
+});
+
 test("a pre-match null score becomes a silent 0-0 baseline before the first goal", async () => {
   const alerts = [];
   const sequence = [
@@ -283,6 +454,10 @@ test("a pre-match null score becomes a silent 0-0 baseline before the first goal
   const h = harness({ matches: (call) => [sequence[call - 1]], alert: () => alerts.push("play") });
   for (const _match of sequence) await h.runtime.refresh(settings());
   assert.deepEqual(alerts, ["play"]);
+  assert.deepEqual(
+    h.rendered.filter(({ options }) => options).map(({ options }) => options.goalSide),
+    [null, null, "home"],
+  );
 });
 
 test("selection and match changes establish new silent baselines", async () => {
@@ -367,8 +542,8 @@ test("audio failures are contained and polling/rendering continue", async () => 
   assert.ok(h.timers.length >= 2);
 });
 
-test("today's unfinished match polls once after exactly two minutes", async () => {
-  const h = harness({ matches: [event({ status: "TIMED", homeScore: null, awayScore: null })] });
+test("an active match polls once after exactly two minutes", async () => {
+  const h = harness({ matches: [event({ status: "IN_PLAY" })] });
   await h.runtime.refresh(settings());
   assert.equal(POLL_INTERVAL_MS, 120000);
   assert.equal(h.timers.length, 1);
@@ -378,7 +553,139 @@ test("today's unfinished match polls once after exactly two minutes", async () =
   assert.equal(h.timers.length, 2, "the completed poll schedules one next one-shot timer");
 });
 
-test("scheduled polling preserves the current image until it emits only the successful update", async () => {
+test("a future scheduled match wakes exactly at kickoff without an earlier API call", async () => {
+  let reference = new Date(NOW);
+  const kickoff = new Date(NOW.getTime() + 10 * 60 * 1000);
+  const h = harness({
+    matches: [event({ status: "TIMED", kickoff: kickoff.toISOString(), homeScore: null, awayScore: null })],
+    now: () => new Date(reference),
+  });
+  await h.runtime.refresh(settings());
+  assert.equal(h.calls.length, 1);
+  assert.equal(h.timers.length, 1);
+  assert.equal(h.timers[0].delay, kickoff.getTime() - NOW.getTime());
+  assert.equal(h.calls.length, 1, "arming the local wakeup makes no provider call");
+
+  reference = kickoff;
+  await h.timers[0].callback();
+  assert.equal(h.calls.length, 2, "kickoff wakeup makes exactly one background request");
+  assert.equal(h.timers.length, 2);
+  assert.equal(h.timers[1].delay, POLL_INTERVAL_MS, "lagging TIMED status enters the two-minute cadence");
+  assert.equal(h.sent.filter(({ data }) => /Loading…/.test(data)).length, 1, "the kickoff request stays background");
+});
+
+test("background discards a postponed retained match and selects an alternative live match", async () => {
+  let reference = new Date(NOW);
+  const kickoff = new Date(NOW.getTime() + 60000);
+  const scheduled = event({ id: "same", homeTeam: "Scheduled", status: "TIMED", kickoff: kickoff.toISOString(), homeScore: null, awayScore: null });
+  const postponed = event({ ...scheduled, homeTeam: "Postponed", status: "POSTPONED" });
+  const live = event({ id: "live", homeTeam: "Alternative Live", status: "IN_PLAY", kickoff: NOW.toISOString(), homeScore: 3, awayScore: 1 });
+  const alerts = [];
+  const h = harness({
+    matches: (call) => call === 1 ? [scheduled] : [postponed, live],
+    now: () => new Date(reference),
+    alert: () => alerts.push("play"),
+  });
+  await h.runtime.refresh(settings());
+  reference = kickoff;
+  await h.timers[0].callback();
+
+  assert.match(h.sent.at(-1).data, /Alternative Live/);
+  assert.equal(h.rendered.at(-1).options.goalSide, null, "the replacement match starts a silent baseline");
+  assert.deepEqual(alerts, []);
+  assert.equal(h.timers[1].delay, POLL_INTERVAL_MS);
+});
+
+test("background discards a finished retained match and wakes for the next future match", async () => {
+  let reference = new Date(NOW);
+  const kickoff = new Date(NOW.getTime() + 60000);
+  const nextKickoff = new Date(NOW.getTime() + 10 * 60000);
+  const scheduled = event({ id: "same", homeTeam: "Scheduled", status: "TIMED", kickoff: kickoff.toISOString(), homeScore: null, awayScore: null });
+  const finished = event({ ...scheduled, homeTeam: "Finished", status: "FINISHED", homeScore: 2, awayScore: 0 });
+  const future = event({ id: "future", homeTeam: "Future", status: "TIMED", kickoff: nextKickoff.toISOString(), homeScore: null, awayScore: null });
+  const alerts = [];
+  const h = harness({
+    matches: (call) => call === 1 ? [scheduled] : [finished, future],
+    now: () => new Date(reference),
+    alert: () => alerts.push("play"),
+  });
+  await h.runtime.refresh(settings());
+  reference = kickoff;
+  await h.timers[0].callback();
+
+  assert.match(h.sent.at(-1).data, /Future/);
+  assert.equal(h.rendered.at(-1).options.goalSide, null);
+  assert.deepEqual(alerts, []);
+  assert.equal(h.timers[1].delay, nextKickoff.getTime() - kickoff.getTime());
+});
+
+test("invalid or foreign retained matches fall back to the bounded next message without a timer", async () => {
+  const kickoff = new Date(NOW.getTime() + 60000);
+  const scheduled = event({ id: "same", status: "TIMED", kickoff: kickoff.toISOString(), homeScore: null, awayScore: null });
+  const cases = [
+    event({ ...scheduled, kickoff: "invalid" }),
+    event({ ...scheduled, status: "LIVE", homeTeamId: 1, awayTeamId: 2 }),
+  ];
+  for (const invalid of cases) {
+    let reference = new Date(NOW);
+    const h = harness({ matches: (call) => call === 1 ? [scheduled] : [invalid], now: () => new Date(reference) });
+    await h.runtime.refresh(settings());
+    reference = kickoff;
+    await h.timers[0].callback();
+    assert.equal(h.sent.at(-1).data, "Betis\nNo upcoming match");
+    assert.equal(h.timers.length, 1, "no orphan replacement timer is armed");
+  }
+});
+
+test("a retained future match becoming live preserves its score baseline", async () => {
+  let reference = new Date(NOW);
+  const kickoff = new Date(NOW.getTime() + 60000);
+  const scheduled = event({ id: "same", status: "TIMED", kickoff: kickoff.toISOString(), homeScore: null, awayScore: null });
+  const live = event({ ...scheduled, status: "LIVE", homeScore: 1, awayScore: 0 });
+  const alerts = [];
+  const h = harness({
+    matches: (call) => call === 1 ? [scheduled] : [live],
+    now: () => new Date(reference),
+    alert: () => alerts.push("play"),
+  });
+  await h.runtime.refresh(settings());
+  reference = kickoff;
+  await h.timers[0].callback();
+
+  assert.equal(h.rendered.at(-1).options.goalSide, "home");
+  assert.deepEqual(alerts, ["play"]);
+  assert.equal(h.timers[1].delay, POLL_INTERVAL_MS);
+});
+
+test("a scheduled match whose kickoff passed polls in two minutes", async () => {
+  const h = harness({ matches: [event({ status: "SCHEDULED", kickoff: "2026-09-14T17:59:00Z", homeScore: null, awayScore: null })] });
+  await h.runtime.refresh(settings());
+  assert.equal(h.timers.length, 1);
+  assert.equal(h.timers[0].delay, POLL_INTERVAL_MS);
+});
+
+test("last mode never polls while next mode and its polling refresh retain that mode", async () => {
+  const matches = [
+    event({ id: "last", homeTeam: "Last Home", status: "FINISHED", kickoff: "2026-09-14T17:00:00Z" }),
+    event({ id: "next", homeTeam: "Next Home", status: "IN_PLAY", kickoff: "2026-09-14T17:55:00Z" }),
+  ];
+  const h = harness({ matches });
+  await h.runtime.refresh(settings(), { resetMode: "always" });
+  assert.equal(h.timers.length, 1, "nearest selects the active fixture");
+
+  await h.runtime.toggle({ context: "ctx" });
+  assert.match(h.sent.at(-1).data, /Last Home/);
+  assert.equal(h.timers.length, 1, "last view does not create a timer");
+
+  await h.runtime.toggle({ context: "ctx" });
+  assert.match(h.sent.at(-1).data, /Next Home/);
+  assert.equal(h.timers.length, 2);
+  await h.timers.at(-1).callback();
+  assert.match(h.sent.at(-1).data, /Next Home/);
+  assert.equal(h.timers.length, 3, "polling retains next mode and schedules its successor");
+});
+
+test("automatic polling preserves the current image until it emits only the successful update", async () => {
   let resolvePoll;
   const pollResult = new Promise((resolve) => { resolvePoll = resolve; });
   const h = harness({
@@ -400,7 +707,7 @@ test("scheduled polling preserves the current image until it emits only the succ
   assert.doesNotMatch(h.sent.at(-1).data, /Loading…/);
 });
 
-test("scheduled polling replaces the current image with Data unavailable on error", async () => {
+test("automatic polling replaces the current image with Data unavailable on error", async () => {
   const h = harness({
     matches: (call) => {
       if (call === 1) return [event({ status: "IN_PLAY" })];
@@ -457,16 +764,121 @@ test("a stale background response cannot draw, alert, change the baseline or sch
   assert.equal(alerts.length, stateAfterForeground.alerts, "the stale score never became the baseline");
 });
 
-test("future-day and terminal matches never poll", async () => {
-  const future = harness({ matches: [event({ status: "TIMED", kickoff: "2026-09-15T18:00:00Z", date: "2026-09-15" })] });
-  await future.runtime.refresh(settings());
-  assert.equal(future.timers.length, 0);
+test("a stale toggle response cannot restore its mode, selection, marker, audio or timer", async () => {
+  let resolveToggle;
+  const slowToggle = new Promise((resolve) => { resolveToggle = resolve; });
+  const live = event({ id: "live", homeTeam: "Live Home", status: "IN_PLAY", kickoff: "2026-09-14T17:55:00Z", homeScore: 0, awayScore: 0 });
+  const finished = event({ id: "last", homeTeam: "Stale Last", status: "FINISHED", kickoff: "2026-09-14T17:00:00Z", homeScore: 4, awayScore: 0 });
+  const alerts = [];
+  const h = harness({
+    matches: (call) => call === 1 ? [live] : call === 2 ? slowToggle : call === 3 ? [live] : [finished, live],
+    alert: () => alerts.push("play"),
+  });
+  await h.runtime.refresh(settings(), { resetMode: "always" });
+  const stale = h.runtime.toggle({ context: "ctx" });
+  await new Promise((resolve) => setImmediate(resolve));
+  await h.runtime.refresh(settings(), { resetMode: "always" });
+  const current = { sent: h.sent.length, rendered: h.rendered.length, timers: h.timers.length };
 
+  resolveToggle([finished]);
+  await stale;
+  assert.deepEqual({ sent: h.sent.length, rendered: h.rendered.length, timers: h.timers.length }, current);
+  assert.deepEqual(alerts, []);
+  assert.equal(h.rendered.at(-1).options.goalSide, null);
+
+  await h.runtime.toggle({ context: "ctx" });
+  assert.match(h.sent.at(-1).data, /Stale Last/, "settings reset survived, so the next press selects last");
+  assert.equal(h.timers.length, current.timers, "the finished last view creates no timer");
+});
+
+test("terminal and postponed matches never schedule timers", async () => {
   for (const status of ["FINISHED", "CANCELLED", "POSTPONED", "SUSPENDED", "AWARDED"]) {
     const terminal = harness({ matches: [event({ status })] });
     await terminal.runtime.refresh(settings());
     assert.equal(terminal.timers.length, 0, status);
   }
+});
+
+test("IN_PLAY, PAUSED and LIVE poll regardless of the local calendar day", async () => {
+  const reference = new Date(2026, 8, 14, 23, 55);
+  const afterMidnight = new Date(2026, 8, 15, 0, 5).toISOString();
+  for (const status of ["IN_PLAY", "PAUSED", "LIVE"]) {
+    const h = harness({ matches: [event({ status, kickoff: afterMidnight })], now: () => reference });
+    await h.runtime.refresh(settings());
+    assert.equal(h.timers.length, 1, `${status} remains authoritative across midnight`);
+    assert.equal(h.timers[0].delay, POLL_INTERVAL_MS);
+  }
+});
+
+test("a kickoff beyond Node's safe timeout is reached in local chunks without API calls between them", async () => {
+  let nowMs = NOW.getTime();
+  const kickoffMs = nowMs + MAX_TIMEOUT_MS + 5000;
+  const match = event({ status: "TIMED", kickoff: new Date(kickoffMs).toISOString(), homeScore: null, awayScore: null });
+  const h = harness({ matches: [match], now: () => new Date(nowMs) });
+  await h.runtime.refresh(settings());
+  assert.equal(h.calls.length, 1);
+  assert.equal(h.timers[0].delay, MAX_TIMEOUT_MS);
+
+  nowMs += MAX_TIMEOUT_MS;
+  await h.timers[0].callback();
+  assert.equal(h.calls.length, 1, "safe chunk rearming stays local");
+  assert.equal(h.timers[1].delay, 5000);
+
+  nowMs = kickoffMs;
+  await h.timers[1].callback();
+  assert.equal(h.calls.length, 2, "only the final kickoff boundary calls the provider");
+  assert.equal(h.timers[2].delay, POLL_INTERVAL_MS);
+});
+
+test("mode, selection, clear and dispose invalidate an armed kickoff wakeup", async () => {
+  const kickoff = new Date(NOW.getTime() + 60000).toISOString();
+  const future = event({ id: "future", status: "TIMED", kickoff, homeScore: null, awayScore: null });
+  const finished = event({ id: "last", status: "FINISHED", kickoff: "2026-09-14T17:00:00Z" });
+
+  const mode = harness({ matches: [future, finished] });
+  await mode.runtime.refresh(settings());
+  const modeWake = mode.timers[0];
+  await mode.runtime.toggle({ context: "ctx" });
+  const modeCalls = mode.calls.length;
+  await modeWake.callback();
+  assert.equal(mode.calls.length, modeCalls);
+  assert.ok(mode.cleared.includes(modeWake));
+
+  const selection = harness({ matches: [future] });
+  await selection.runtime.refresh(settings());
+  const selectionWake = selection.timers[0];
+  await selection.runtime.refresh(settings({ competition: "PL" }));
+  const selectionCalls = selection.calls.length;
+  await selectionWake.callback();
+  assert.equal(selection.calls.length, selectionCalls);
+  assert.ok(selection.cleared.includes(selectionWake));
+
+  for (const action of ["clear", "dispose"]) {
+    const h = harness({ matches: [future] });
+    await h.runtime.refresh(settings());
+    const wake = h.timers[0];
+    if (action === "clear") h.runtime.clear({ param: [{ context: "ctx" }] });
+    else h.runtime.dispose();
+    const calls = h.calls.length;
+    await wake.callback();
+    assert.equal(h.calls.length, calls, action);
+    assert.ok(h.cleared.includes(wake), action);
+  }
+});
+
+test("a late wakeup after computer suspension refreshes once and resumes polling", async () => {
+  let nowMs = NOW.getTime();
+  const kickoffMs = nowMs + 60000;
+  const match = event({ status: "TIMED", kickoff: new Date(kickoffMs).toISOString(), homeScore: null, awayScore: null });
+  const h = harness({ matches: [match], now: () => new Date(nowMs) });
+  await h.runtime.refresh(settings());
+  const wake = h.timers[0];
+
+  nowMs = kickoffMs + 60 * 60 * 1000;
+  await wake.callback();
+  assert.equal(h.calls.length, 2, "a delayed callback performs one provider request");
+  assert.equal(h.timers.length, 2);
+  assert.equal(h.timers[1].delay, POLL_INTERVAL_MS);
 });
 
 test("polling stops when the match becomes finished", async () => {

@@ -64,6 +64,21 @@ function liveBadge() {
   return '<g aria-label="Live"><rect x="72" y="8" width="52" height="24" rx="7" fill="#d71920"/><text x="98" y="25" fill="#ffffff" font-family="Arial, sans-serif" font-size="13" font-weight="700" text-anchor="middle">LIVE</text></g>';
 }
 
+/** @typedef {null | "home" | "away" | "both"} GoalSide */
+
+function goalMarkers(goalSide) {
+  const marker = (side) => {
+    const home = side === "home";
+    const points = home ? "8,122 20,111 20,133" : "188,122 176,111 176,133";
+    const label = home ? "Home team goal increase" : "Away team goal increase";
+    return `<g aria-label="${label}"><polygon points="${points}" fill="#ffbf00" stroke="#ffffff" stroke-width="2" stroke-linejoin="round"/></g>`;
+  };
+  if (goalSide === "both") return `${marker("home")}${marker("away")}`;
+  if (goalSide === "home" || goalSide === "away") return marker(goalSide);
+  return "";
+}
+
+/** @param {string} text @param {{ homeCrest?: string, awayCrest?: string, live?: boolean, goalSide?: GoalSide }} options */
 function createScoreImage(text, options = {}) {
   if (typeof text !== "string") return null;
   const lines = text
@@ -81,7 +96,8 @@ function createScoreImage(text, options = {}) {
       return `<text x="${SIZE / 2}" y="${y}" fill="${color}" font-family="Arial, sans-serif" font-size="${fontSize}" font-weight="700" text-anchor="middle">${escapeXml(line)}</text>`;
     }).join("");
   const badge = options.live === true ? liveBadge() : "";
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="${SIZE}" height="${SIZE}" viewBox="0 0 ${SIZE} ${SIZE}"><rect width="${SIZE}" height="${SIZE}" rx="12" fill="#101820"/>${body}${badge}</svg>`;
+  const markers = goalMarkers(options.goalSide);
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="${SIZE}" height="${SIZE}" viewBox="0 0 ${SIZE} ${SIZE}"><rect width="${SIZE}" height="${SIZE}" rx="12" fill="#101820"/>${body}${badge}${markers}</svg>`;
   return `data:image/svg+xml;base64,${Buffer.from(svg, "utf8").toString("base64")}`;
 }
 

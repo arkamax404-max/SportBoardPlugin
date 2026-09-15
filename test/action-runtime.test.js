@@ -241,14 +241,12 @@ test("start runs the exact ordered stubbed sequence (connected -> add -> run -> 
   socket.emit("data", serverTextFrame(JSON.stringify(runReq)));
   socket.emit("data", serverTextFrame(JSON.stringify(runReq)));
   socket.emit("data", serverTextFrame(JSON.stringify(clearReq)));
-  // A key press also triggers an asynchronous team refresh, which renders the
-  // image state for that key. The ordered command sequence is pinned exactly; the
-  // deterministic scaffold payloads are pinned field by field, and the generated
-  // image payload is verified by decoding it instead of freezing base64 here.
+  // A key press is owned only by the dynamic team view. The ordered sequence pins
+  // that no transient type-0 ActionRuntime state flashes before the dynamic image.
   const payloads = outboundPayloads(recorder);
   assert.deepEqual(payloads.map((payload) => payload.cmd), [
     "connected", "add", "state", "sendToPropertyInspector", "state",
-    "run", "state", "state", "run", "state", "state", "clear",
+    "run", "state", "run", "state", "clear",
   ]);
   assert.deepEqual(payloads[0], { cmd: "connected", uuid: PLUGIN_UUID, code: 0 });
   assert.deepEqual(payloads[1], { ...addReq, code: 0 });
@@ -263,11 +261,9 @@ test("start runs the exact ordered stubbed sequence (connected -> add -> run -> 
     payload: { teams: [], error: "token required" },
   });
   assert.deepEqual(payloads[5], { ...runReq, code: 0 });
-  assert.deepEqual(payloads[6], stateCommand(1));
-  assert.deepEqual(payloads[8], { ...runReq, code: 0 });
-  assert.deepEqual(payloads[9], stateCommand(0));
-  assert.deepEqual(payloads[11], { ...clearReq, code: 0 });
-  for (const index of [4, 7, 10]) {
+  assert.deepEqual(payloads[7], { ...runReq, code: 0 });
+  assert.deepEqual(payloads[9], { ...clearReq, code: 0 });
+  for (const index of [4, 6, 8]) {
     const image = payloads[index].param.statelist[0];
     assert.equal(image.type, 1);
     assert.equal(image.uuid, PLUGIN_UUID);
@@ -276,6 +272,36 @@ test("start runs the exact ordered stubbed sequence (connected -> add -> run -> 
     assert.match(svg, /Add token/);
   }
   assert.deepEqual(lines, []); // the happy path writes no stderr noise
+});
+
+test("start composes run directly to TeamRuntime.toggle without a duplicate refresh", () => {
+  const main = require("../src/plugin/main.js");
+  const { TeamRuntime } = require("../src/plugin/team-runtime.js");
+  const calls = [];
+  const originalRefresh = TeamRuntime.prototype.refresh;
+  const originalToggle = TeamRuntime.prototype.toggle;
+  TeamRuntime.prototype.refresh = function (event, options) { calls.push({ method: "refresh", event, options }); };
+  TeamRuntime.prototype.toggle = function (event) { calls.push({ method: "toggle", event }); };
+  try {
+    const recorder = { rawWrites: [], connects: [] };
+    const socket = createFakeSocket(recorder);
+    main.start({
+      argv: VALID_ARGV,
+      connect: () => socket,
+      randomBytes: (size) => Buffer.alloc(size, 0xcd),
+      stderr: () => {},
+    });
+    socket.emit("connect");
+    completeUpgrade(recorder, socket);
+    socket.emit("data", serverTextFrame(JSON.stringify({ cmd: "run", uuid: PLUGIN_UUID, key: "K1", actionid: ACTION_UUID })));
+    assert.deepEqual(calls.map(({ method }) => method), ["toggle"]);
+    assert.equal(calls[0].event.param, undefined, "composition forwards paramless run safely");
+    const runOutputs = outboundPayloads(recorder).filter((payload) => payload.cmd === "state");
+    assert.deepEqual(runOutputs, [], "run emits no static state flash through ActionRuntime");
+  } finally {
+    TeamRuntime.prototype.refresh = originalRefresh;
+    TeamRuntime.prototype.toggle = originalToggle;
+  }
 });
 
 test("SIGINT and SIGTERM disposal destroys the socket once with sanitized categories only", () => {

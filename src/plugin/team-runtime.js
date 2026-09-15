@@ -1,8 +1,8 @@
 "use strict";
 
-// Per-key view for one configured team. It selects the fixture nearest to now and
-// owns a single one-shot poll timer per key context. Polling exists only on the
-// match's local calendar day while the provider still reports a non-terminal state.
+// Per-key view for one configured team. Initial/configuration loads select the
+// fixture nearest to now; key presses alternate between the last finished and an
+// active-or-upcoming fixture. Each context owns one poll timer and score baseline.
 
 const { createScoreImage } = require("./score-image.js");
 
@@ -10,8 +10,13 @@ const DEFAULT_COMPETITION = "PD";
 const DEFAULT_TEAM_ID = 90;
 const DEFAULT_TEAM_LABEL = "Betis";
 const POLL_INTERVAL_MS = 120000;
-const TERMINAL_STATUSES = new Set(["FINISHED", "CANCELLED", "POSTPONED", "SUSPENDED", "AWARDED"]);
+const MAX_TIMEOUT_MS = 0x7fffffff;
 const LIVE_STATUSES = new Set(["IN_PLAY", "PAUSED", "LIVE"]);
+const SCHEDULED_STATUSES = new Set(["SCHEDULED", "TIMED"]);
+
+function isCurrentOrNextStatus(status) {
+  return LIVE_STATUSES.has(status) || SCHEDULED_STATUSES.has(status);
+}
 
 function toTeamId(value) {
   if (typeof value === "number" && Number.isInteger(value)) return value;
@@ -24,7 +29,7 @@ function isTeamMatch(event, teamId) {
 }
 
 function kickoffTime(event) {
-  const value = Date.parse(event?.kickoff);
+  const value = Date.parse(event?.kickoff ?? event?.utcDate);
   return Number.isNaN(value) ? null : value;
 }
 
@@ -64,17 +69,83 @@ function selectNearestMatch(matches, reference, teamId) {
   return selected;
 }
 
+function matchIdOf(match) {
+  return typeof match?.id === "string" || typeof match?.id === "number" ? String(match.id) : null;
+}
+
+function matchIdOrder(match) {
+  return matchIdOf(match) ?? "";
+}
+
+function compareMatchIds(left, right) {
+  const leftId = matchIdOrder(left);
+  const rightId = matchIdOrder(right);
+  return leftId < rightId ? -1 : leftId > rightId ? 1 : 0;
+}
+
+function selectMatchingMatch(matches, reference, teamId, accepts, compare) {
+  if (!Array.isArray(matches) || !(reference instanceof Date) || Number.isNaN(reference.getTime())) return null;
+  const now = reference.getTime();
+  let selected = null;
+  let selectedTime = null;
+  for (const match of matches) {
+    if (!isTeamMatch(match, teamId)) continue;
+    const time = kickoffTime(match);
+    if (time === null || !accepts(match, time, now)) continue;
+    if (selected === null || compare(match, time, selected, selectedTime, now) < 0) {
+      selected = match;
+      selectedTime = time;
+    }
+  }
+  return selected;
+}
+
+function selectLastFinishedMatch(matches, reference, teamId) {
+  return selectMatchingMatch(
+    matches,
+    reference,
+    teamId,
+    (match, time, now) => match?.status === "FINISHED" && time <= now,
+    (match, time, selected, selectedTime) => selectedTime - time || compareMatchIds(match, selected),
+  );
+}
+
+function selectNextMatch(matches, reference, teamId) {
+  const active = selectMatchingMatch(
+    matches,
+    reference,
+    teamId,
+    (match) => LIVE_STATUSES.has(match?.status),
+    (match, time, selected, selectedTime, now) => Math.abs(time - now) - Math.abs(selectedTime - now)
+      || compareMatchIds(match, selected),
+  );
+  if (active !== null) return active;
+  return selectMatchingMatch(
+    matches,
+    reference,
+    teamId,
+    (match, time, now) => SCHEDULED_STATUSES.has(match?.status) && time > now,
+    (match, time, selected, selectedTime) => time - selectedTime || compareMatchIds(match, selected),
+  );
+}
+
 function sameLocalCalendarDate(left, right) {
   return left.getFullYear() === right.getFullYear()
     && left.getMonth() === right.getMonth()
     && left.getDate() === right.getDate();
 }
 
-function shouldPoll(match, reference) {
-  const time = kickoffTime(match);
-  if (time === null || !(reference instanceof Date) || Number.isNaN(reference.getTime())) return false;
-  const status = typeof match.status === "string" ? match.status.toUpperCase() : "";
-  return !TERMINAL_STATUSES.has(status) && sameLocalCalendarDate(new Date(time), reference);
+/** @typedef {{ kind: "none" } | { kind: "wake-at-kickoff", kickoff: number } | { kind: "poll-in-2m", delay: number }} MatchSchedule */
+
+/** @returns {MatchSchedule} */
+function decideMatchSchedule(match, reference) {
+  if (!(reference instanceof Date) || Number.isNaN(reference.getTime())) return { kind: "none" };
+  const kickoff = kickoffTime(match);
+  if (kickoff === null) return { kind: "none" };
+  if (LIVE_STATUSES.has(match?.status)) return { kind: "poll-in-2m", delay: POLL_INTERVAL_MS };
+  if (!SCHEDULED_STATUSES.has(match?.status)) return { kind: "none" };
+  if (kickoff > reference.getTime()) return { kind: "wake-at-kickoff", kickoff };
+  return { kind: "poll-in-2m", delay: POLL_INTERVAL_MS };
 }
 
 function isLiveMatch(match) {
@@ -172,12 +243,23 @@ class TeamRuntime {
     if (image !== null) this.#host.setBaseDataIcon(context, image);
   }
 
-  #replaceContext(context, param) {
+  #replaceContext(context, param, { resetMode, viewMode } = {}) {
     const prior = this.#contexts.get(context);
     if (prior?.timer !== null && prior?.timer !== undefined) this.#clearTimeout(prior.timer);
     const selection = selectionOf(param);
-    const baseline = prior?.selection === selection ? prior.baseline : null;
-    const entry = { generation: (prior?.generation ?? 0) + 1, timer: null, param, selection, baseline };
+    const sameSelection = prior?.selection === selection;
+    const nextMode = viewMode ?? (resetMode === "always" || !sameSelection ? "nearest" : prior?.viewMode ?? "nearest");
+    const sameView = resetMode !== "always" && sameSelection && prior?.viewMode === nextMode;
+    const entry = {
+      generation: (prior?.generation ?? 0) + 1,
+      timer: null,
+      param,
+      selection,
+      viewMode: nextMode,
+      selectedStatus: sameView ? prior.selectedStatus : null,
+      selectedMatchId: sameView ? prior.selectedMatchId : null,
+      baseline: sameView ? prior.baseline : null,
+    };
     this.#contexts.set(context, entry);
     return entry;
   }
@@ -187,29 +269,70 @@ class TeamRuntime {
   }
 
   #observeScore(entry, match) {
-    const matchId = typeof match?.id === "string" || typeof match?.id === "number" ? String(match.id) : null;
+    const matchId = matchIdOf(match);
     const score = scoreOf(match);
     if (matchId === null) {
       entry.baseline = null;
-      return;
+      return null;
     }
     const prior = entry.baseline;
     entry.baseline = { matchId, score };
-    if (score === null || prior === null || prior.matchId !== matchId || prior.score === null) return;
-    if (prior.score.home === score.home && prior.score.away === score.away) return;
-    if (!isLiveMatch(match)) return;
-    try {
-      const result = this.#alert();
-      if (result && typeof result.catch === "function") result.catch(() => {});
-    } catch {
-      // Audio is best-effort and must never break rendering or future polling.
+    if (score === null || prior === null || prior.matchId !== matchId || prior.score === null) return null;
+    const changed = prior.score.home !== score.home || prior.score.away !== score.away;
+    if (changed && isLiveMatch(match)) {
+      try {
+        const result = this.#alert();
+        if (result && typeof result.catch === "function") result.catch(() => {});
+      } catch {
+        // Audio is best-effort and must never break rendering or future polling.
+      }
     }
+    const home = score.home > prior.score.home;
+    const away = score.away > prior.score.away;
+    if (home && away) return "both";
+    if (home) return "home";
+    if (away) return "away";
+    return null;
   }
 
-  async refresh({ context, param } = {}, { mode = "foreground" } = {}) {
-    const entry = this.#replaceContext(context, param);
-    const token = param?.token;
-    const label = typeof param?.teamLabel === "string" && param.teamLabel.length > 0 ? param.teamLabel : DEFAULT_TEAM_LABEL;
+  #schedulePoll(context, entry, delay) {
+    entry.timer = this.#setTimeout(() => {
+      entry.timer = null;
+      if (!this.#isCurrent(context, entry)) return undefined;
+      return this.refresh({ context, param: entry.param }, { mode: "background", resetMode: "never" });
+    }, delay);
+  }
+
+  #scheduleWake(context, entry, kickoff) {
+    if (!this.#isCurrent(context, entry)) return;
+    const reference = this.#now();
+    const now = reference instanceof Date ? reference.getTime() : Number.NaN;
+    if (Number.isNaN(now)) return;
+    const remaining = kickoff - now;
+    if (remaining <= 0) {
+      return this.refresh({ context, param: entry.param }, { mode: "background", resetMode: "never" });
+    }
+    entry.timer = this.#setTimeout(() => {
+      entry.timer = null;
+      if (!this.#isCurrent(context, entry)) return undefined;
+      return this.#scheduleWake(context, entry, kickoff);
+    }, Math.min(remaining, MAX_TIMEOUT_MS));
+  }
+
+  #backgroundMatch(matches, entry, teamId) {
+    if (entry.selectedMatchId === null) return null;
+    return matches.find((match) => isTeamMatch(match, teamId)
+      && kickoffTime(match) !== null
+      && isCurrentOrNextStatus(match?.status)
+      && matchIdOf(match) === entry.selectedMatchId) ?? null;
+  }
+
+  async refresh({ context, param } = {}, { mode = "foreground", resetMode = "selection", viewMode } = {}) {
+    const prior = this.#contexts.get(context);
+    const effectiveParam = param && typeof param === "object" && !Array.isArray(param) ? param : prior?.param;
+    const entry = this.#replaceContext(context, effectiveParam, { resetMode, viewMode });
+    const token = effectiveParam?.token;
+    const label = typeof effectiveParam?.teamLabel === "string" && effectiveParam.teamLabel.length > 0 ? effectiveParam.teamLabel : DEFAULT_TEAM_LABEL;
     if (typeof token !== "string" || token.trim().length === 0) {
       entry.baseline = null;
       this.#draw(context, `${label}\nAdd token`);
@@ -219,16 +342,30 @@ class TeamRuntime {
     const reference = this.#now();
     if (mode === "foreground") this.#draw(context, `${label}\nLoading…`);
     try {
-      const teamId = toTeamId(param?.teamId);
-      const competition = typeof param?.competition === "string" && param.competition.trim().length > 0
-        ? param.competition.trim()
+      const teamId = toTeamId(effectiveParam?.teamId);
+      const competition = typeof effectiveParam?.competition === "string" && effectiveParam.competition.trim().length > 0
+        ? effectiveParam.competition.trim()
         : DEFAULT_COMPETITION;
       const matches = await this.#service.listMatches(teamId, token, competition, reference);
       if (!this.#isCurrent(context, entry)) return;
-      const match = selectNearestMatch(matches, reference, teamId);
+      if (mode === "background" && entry.viewMode === "nearest" && isCurrentOrNextStatus(entry.selectedStatus)) {
+        entry.viewMode = "next";
+      }
+      const retained = mode === "background" && Array.isArray(matches)
+        ? this.#backgroundMatch(matches, entry, teamId)
+        : null;
+      const match = retained ?? (entry.viewMode === "last"
+        ? selectLastFinishedMatch(matches, reference, teamId)
+        : entry.viewMode === "next"
+          ? selectNextMatch(matches, reference, teamId)
+          : selectNearestMatch(matches, reference, teamId));
       if (!match) {
         entry.baseline = null;
-        this.#draw(context, `${label}\nNo match`);
+        entry.selectedStatus = null;
+        entry.selectedMatchId = null;
+        const message = entry.viewMode === "last" ? "No finished match"
+          : entry.viewMode === "next" ? "No upcoming match" : "No match";
+        this.#draw(context, `${label}\n${message}`);
         return;
       }
       const loadCrest = typeof this.#service.loadCrest === "function"
@@ -239,17 +376,28 @@ class TeamRuntime {
         loadCrest(match.awayCrestUrl),
       ]);
       if (!this.#isCurrent(context, entry)) return;
-      this.#observeScore(entry, match);
-      this.#draw(context, renderMatch(match, reference), { homeCrest, awayCrest, live: isLiveMatch(match) });
-      if (shouldPoll(match, reference)) {
-        entry.timer = this.#setTimeout(() => {
-          if (!this.#isCurrent(context, entry)) return undefined;
-          return this.refresh({ context, param: entry.param }, { mode: "background" });
-        }, POLL_INTERVAL_MS);
+      const goalSide = this.#observeScore(entry, match);
+      entry.selectedStatus = match.status;
+      entry.selectedMatchId = matchIdOf(match);
+      this.#draw(context, renderMatch(match, reference), { homeCrest, awayCrest, live: isLiveMatch(match), goalSide });
+      if (entry.viewMode !== "last") {
+        const schedule = decideMatchSchedule(match, this.#now());
+        if (schedule.kind === "poll-in-2m") this.#schedulePoll(context, entry, schedule.delay);
+        else if (schedule.kind === "wake-at-kickoff") this.#scheduleWake(context, entry, schedule.kickoff);
       }
     } catch {
       if (this.#isCurrent(context, entry)) this.#draw(context, `${label}\nData unavailable`);
     }
+  }
+
+  toggle({ context, param } = {}) {
+    const prior = this.#contexts.get(context);
+    let viewMode;
+    if (prior?.viewMode === "last") viewMode = "next";
+    else if (prior?.viewMode === "next") viewMode = "last";
+    else if (prior?.selectedStatus === "FINISHED") viewMode = "next";
+    else viewMode = "last";
+    return this.refresh({ context, param }, { mode: "foreground", resetMode: "never", viewMode });
   }
 
   clear(message) {
@@ -274,14 +422,17 @@ module.exports = {
   DEFAULT_COMPETITION,
   DEFAULT_TEAM_ID,
   DEFAULT_TEAM_LABEL,
+  MAX_TIMEOUT_MS,
   POLL_INTERVAL_MS,
   TeamRuntime,
+  decideMatchSchedule,
   formatLocalKickoffTime,
   formatLocalMatchDate,
   isLiveMatch,
   isTeamMatch,
   renderMatch,
+  selectLastFinishedMatch,
   selectNearestMatch,
-  shouldPoll,
+  selectNextMatch,
   toTeamId,
 };

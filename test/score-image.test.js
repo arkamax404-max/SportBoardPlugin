@@ -69,6 +69,32 @@ test("createScoreImage renders a fixed LIVE badge with and without crests", () =
   assert.doesNotMatch(notLive, />LIVE<\/text>/);
 });
 
+test("createScoreImage renders bounded amber goal markers on the requested sides", () => {
+  const home = decode(createScoreImage("Home\nAway\n1 - 0", { goalSide: "home" }));
+  assert.match(home, /aria-label="Home team goal increase"/);
+  assert.match(home, /points="8,122 20,111 20,133"/);
+  assert.doesNotMatch(home, /Away team goal increase/);
+
+  const awayWithCrests = decode(createScoreImage("Home\nAway\n1 - 1", {
+    goalSide: "away",
+    homeCrest: "data:image/png;base64,aG9tZQ==",
+    awayCrest: "data:image/png;base64,YXdheQ==",
+  }));
+  assert.match(awayWithCrests, /aria-label="Away team goal increase"/);
+  assert.match(awayWithCrests, /fill="#ffbf00" stroke="#ffffff"/);
+  assert.equal((awayWithCrests.match(/<image /g) || []).length, 2);
+
+  const both = decode(createScoreImage("Home\nAway\n2 - 2", { goalSide: "both", live: true }));
+  assert.match(both, /Home team goal increase/);
+  assert.match(both, /Away team goal increase/);
+  assert.match(both, />LIVE<\/text>/);
+
+  for (const goalSide of [null, undefined, "left", "HOME", 1]) {
+    const svg = decode(createScoreImage("Home\nAway\n0 - 0", { goalSide }));
+    assert.doesNotMatch(svg, /team goal increase/, String(goalSide));
+  }
+});
+
 test("createScoreImage keeps at most five meaningful lines", () => {
   const svg = decode(createScoreImage("1\n2\n3\n4\n5\n6\n7"));
   assert.match(svg, />5</);

@@ -69,9 +69,11 @@ function start({ argv = process.argv, connect, randomBytes, stderr = writeStderr
   client.on("add", (event) => {
     runtime.add(event);
     catalog.publish(event);
-    teams.refresh(event);
+    teams.refresh(event, { resetMode: "always" });
   });
-  client.on("run", (event) => { runtime.run(event); teams.refresh(event); });
+  // Dynamic content owns the press gesture. Avoid sending a transient static state
+  // immediately before the selected fixture view is redrawn.
+  client.on("run", (event) => { teams.toggle(event); });
   client.on("clear", (message) => {
     runtime.clear(message);
     teams.clear(message);
@@ -88,7 +90,7 @@ function start({ argv = process.argv, connect, randomBytes, stderr = writeStderr
     if (!settings || typeof settings !== "object") return;
     const restored = { context: event.context, param: settings };
     catalog.publish(restored);
-    teams.refresh(restored);
+    teams.refresh(restored, { resetMode: "always" });
   });
   // Transient inspector requests are never merged into the saved settings, so
   // "refresh" cannot become a persisted flag that would bypass the cache on every
