@@ -61,9 +61,10 @@ function crestMatchBody(lines, { homeCrest, awayCrest }) {
 function goalMarkers(goalSide) {
   const marker = (side) => {
     const home = side === "home";
-    const points = home ? "8,122 20,111 20,133" : "188,122 176,111 176,133";
+    const x = home ? 4 : 150;
+    const textX = home ? 25 : 171;
     const label = home ? "Home team goal increase" : "Away team goal increase";
-    return `<g aria-label="${label}"><polygon points="${points}" fill="#ffbf00" stroke="#ffffff" stroke-width="2" stroke-linejoin="round"/></g>`;
+    return `<g aria-label="${label}"><rect x="${x}" y="106" width="42" height="22" rx="11" fill="#d71920" stroke="#ffffff" stroke-width="1"/><text x="${textX}" y="121" fill="#ffffff" font-family="Arial, sans-serif" font-size="11" font-weight="700" text-anchor="middle">Goal!!</text></g>`;
   };
   if (goalSide === "both") return `${marker("home")}${marker("away")}`;
   if (goalSide === "home" || goalSide === "away") return marker(goalSide);
