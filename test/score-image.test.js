@@ -63,23 +63,22 @@ test("createScoreImage ignores non-image crest data", () => {
   assert.doesNotMatch(svg, /<image /);
 });
 
-test("createScoreImage renders a fixed LIVE badge with and without crests", () => {
-  const generic = decode(createScoreImage("Home\nAway\n1 - 0\n9/14/2026", { live: true }));
-  assert.match(generic, /fill="#d71920"/);
-  assert.match(generic, />LIVE<\/text>/);
-  assert.match(generic, /<text x="98" y="55"[^>]*>Home<\/text>/, "generic team text moves below the badge");
+test("createScoreImage preserves supplied LIVE text without adding a duplicate badge", () => {
+  const generic = decode(createScoreImage("Home\nAway\n1 - 0\nLIVE", { live: true }));
+  assert.equal((generic.match(/>LIVE<\/text>/g) || []).length, 1);
+  assert.doesNotMatch(generic, /fill="#d71920"/);
+  assert.doesNotMatch(generic, /aria-label="Live"/);
+  assert.match(generic, /<text x="98" y="38"[^>]*>Home<\/text>/);
+  assert.match(generic, /y="178"[^>]*>LIVE<\/text>/);
 
-  const crests = decode(createScoreImage("Home\nAway\n1 - 0", {
+  const crests = decode(createScoreImage("Home\nAway\n1 - 0\nLIVE", {
     live: true,
     homeCrest: "data:image/png;base64,aG9tZQ==",
     awayCrest: "data:image/png;base64,YXdheQ==",
   }));
-  assert.match(crests, />LIVE<\/text>/);
+  assert.equal((crests.match(/>LIVE<\/text>/g) || []).length, 1);
   assert.equal((crests.match(/<image /g) || []).length, 2);
-  assert.match(crests, /<rect x="72" y="8" width="52" height="24"/);
-
-  const notLive = decode(createScoreImage("Home\nAway\n1 - 0", { live: false }));
-  assert.doesNotMatch(notLive, />LIVE<\/text>/);
+  assert.doesNotMatch(crests, /aria-label="Live"/);
 });
 
 test("createScoreImage renders bounded amber goal markers on the requested sides", () => {
@@ -97,10 +96,10 @@ test("createScoreImage renders bounded amber goal markers on the requested sides
   assert.match(awayWithCrests, /fill="#ffbf00" stroke="#ffffff"/);
   assert.equal((awayWithCrests.match(/<image /g) || []).length, 2);
 
-  const both = decode(createScoreImage("Home\nAway\n2 - 2", { goalSide: "both", live: true }));
+  const both = decode(createScoreImage("Home\nAway\n2 - 2\nLIVE", { goalSide: "both", live: true }));
   assert.match(both, /Home team goal increase/);
   assert.match(both, /Away team goal increase/);
-  assert.match(both, />LIVE<\/text>/);
+  assert.equal((both.match(/>LIVE<\/text>/g) || []).length, 1);
 
   for (const goalSide of [null, undefined, "left", "HOME", 1]) {
     const svg = decode(createScoreImage("Home\nAway\n0 - 0", { goalSide }));
