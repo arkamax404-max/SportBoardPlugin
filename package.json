@@ -1,6 +1,6 @@
 {
   "name": "sportboard-plugin",
-  "version": "0.14.7",
+  "version": "0.14.8",
   "private": true,
   "description": "Football match score and fixture keys for the Ulanzi D200",
   "author": "Santiago Pérez",
