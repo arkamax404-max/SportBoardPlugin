@@ -37,7 +37,7 @@ const EXPECTED_CONTROLLERS = ["Keypad"];
 const EXPECTED_DEVICES = ["D200"];
 const EXPECTED_STATE_NAMES = ["Ready", "Selected"];
 const EXPECTED_AUTHOR = "Santiago Pérez";
-const EXPECTED_VERSION = "0.14.5";
+const EXPECTED_VERSION = "0.14.6";
 const EXPECTED_STORE_KEYS = ["cover", "screenshots", "longDescription", "deviceTypes", "tags"];
 const EXPECTED_STORE_PATHS = {
   cover: "assets/cover.png",
