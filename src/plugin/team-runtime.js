@@ -13,6 +13,14 @@ const POLL_INTERVAL_MS = 120000;
 const MAX_TIMEOUT_MS = 0x7fffffff;
 const LIVE_STATUSES = new Set(["IN_PLAY", "PAUSED", "LIVE"]);
 const SCHEDULED_STATUSES = new Set(["SCHEDULED", "TIMED"]);
+const SUPPORTED_MATCH_STATUSES = new Set([
+  "SCHEDULED", "TIMED", "IN_PLAY", "PAUSED", "FINISHED",
+  "SUSPENDED", "POSTPONED", "CANCELLED", "AWARDED", "LIVE",
+]);
+const ACTIVE_DETAIL_TRANSITIONS = new Set([
+  "IN_PLAY", "PAUSED", "LIVE", "FINISHED",
+  "SUSPENDED", "POSTPONED", "CANCELLED", "AWARDED",
+]);
 
 function isCurrentOrNextStatus(status) {
   return LIVE_STATUSES.has(status) || SCHEDULED_STATUSES.has(status);
@@ -190,6 +198,92 @@ function isLiveMatch(match) {
   return LIVE_STATUSES.has(status);
 }
 
+function matchClockValue(value) {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : null;
+}
+
+function hasCompatibleDetailIdentity(match, detail) {
+  if (matchIdOf(detail) !== matchIdOf(match)) return false;
+  const positiveInteger = (value) => Number.isInteger(value) && value > 0;
+  const listHome = match?.homeTeamId;
+  const listAway = match?.awayTeamId;
+  const detailHome = detail?.homeTeamId;
+  const detailAway = detail?.awayTeamId;
+
+  if (detailHome != null && !positiveInteger(detailHome)) return false;
+  if (detailAway != null && !positiveInteger(detailAway)) return false;
+  if (listHome != null && detailHome != null && listHome !== detailHome) return false;
+  if (listAway != null && detailAway != null && listAway !== detailAway) return false;
+  if (detailHome != null && listAway != null && detailHome === listAway) return false;
+  if (detailAway != null && listHome != null && detailAway === listHome) return false;
+  if (detailHome != null && detailAway != null && detailHome === detailAway) return false;
+  return true;
+}
+
+function hasCompatibleDetailStatus(match, detail) {
+  if (detail.status == null) return true;
+  if (!SUPPORTED_MATCH_STATUSES.has(detail.status)) return false;
+  return LIVE_STATUSES.has(match?.status) && ACTIVE_DETAIL_TRANSITIONS.has(detail.status);
+}
+
+function mergeMatchDetail(match, detail) {
+  if (!detail || typeof detail !== "object") return match;
+  if (!hasCompatibleDetailIdentity(match, detail) || !hasCompatibleDetailStatus(match, detail)) return match;
+  if (matchClockValue(detail.minute) === null) return match;
+
+  const merged = { ...match };
+  const nonEmptyString = (value) => typeof value === "string" && value.trim().length > 0;
+  const positiveInteger = (value) => Number.isInteger(value) && value > 0;
+  const score = (value) => Number.isInteger(value) && value >= 0;
+  const validKickoff = (value) => nonEmptyString(value) && !Number.isNaN(Date.parse(value));
+  const validCrestUrl = (value) => {
+    if (!nonEmptyString(value)) return false;
+    try {
+      return new URL(value).protocol === "https:";
+    } catch {
+      return false;
+    }
+  };
+  const validDate = (value) => {
+    if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+    const date = new Date(`${value}T00:00:00Z`);
+    return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value;
+  };
+  const validTime = (value) => typeof value === "string"
+    && /^(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d$/.test(value);
+  const validStatus = (value) => SUPPORTED_MATCH_STATUSES.has(value);
+  const fields = [
+    ["leagueId", nonEmptyString], ["round", nonEmptyString],
+    ["homeTeamId", positiveInteger], ["awayTeamId", positiveInteger],
+    ["homeTeam", nonEmptyString], ["awayTeam", nonEmptyString],
+    ["homeCrestUrl", validCrestUrl], ["awayCrestUrl", validCrestUrl],
+    ["homeScore", score], ["awayScore", score],
+    ["status", validStatus], ["minute", (value) => matchClockValue(value) !== null],
+    ["injuryTime", (value) => matchClockValue(value) !== null],
+    ["kickoff", validKickoff], ["date", validDate], ["time", validTime],
+  ];
+  for (const [field, accepts] of fields) {
+    if (accepts(detail[field])) merged[field] = detail[field];
+  }
+  return Object.freeze(merged);
+}
+
+function describeLiveMatch(match) {
+  const status = typeof match?.status === "string" ? match.status.toUpperCase() : "";
+  if (!LIVE_STATUSES.has(status)) return null;
+
+  const minute = matchClockValue(match?.minute);
+  if (status === "PAUSED" && minute === null) return "HALF TIME";
+  if (minute === null) return "LIVE";
+
+  const injuryTime = matchClockValue(match?.injuryTime);
+  const clock = `${minute}${injuryTime !== null && injuryTime > 0 ? `+${injuryTime}` : ""}'`;
+  if (status === "PAUSED") return `HALF TIME ${clock}`;
+  if (minute <= 45) return `1ST HALF ${clock}`;
+  if (minute <= 90) return `2ND HALF ${clock}`;
+  return `EXTRA TIME ${clock}`;
+}
+
 function scoreOf(match) {
   if (match?.homeScore == null && match?.awayScore == null) return { home: 0, away: 0 };
   if (!Number.isFinite(match?.homeScore) || !Number.isFinite(match?.awayScore)) return null;
@@ -228,7 +322,7 @@ function contextualMatchDate(event, reference) {
   if (scheduled !== null) return scheduled.text;
   if (!sameLocalCalendarDate(new Date(time), reference)) return formatLocalMatchDate(event);
 
-  if (LIVE_STATUSES.has(status)) return "LIVE";
+  if (LIVE_STATUSES.has(status)) return describeLiveMatch(event);
   if (status === "FINISHED") return "FINISHED";
   return formatLocalMatchDate(event);
 }
@@ -411,12 +505,12 @@ class TeamRuntime {
       const retained = mode === "background" && Array.isArray(matches)
         ? this.#backgroundMatch(matches, entry, teamId)
         : null;
-      const match = retained ?? (entry.viewMode === "last"
+      const selectedMatch = retained ?? (entry.viewMode === "last"
         ? selectLastFinishedMatch(matches, reference, teamId)
         : entry.viewMode === "next"
           ? selectNextMatch(matches, reference, teamId)
           : selectNearestMatch(matches, reference, teamId));
-      if (!match) {
+      if (!selectedMatch) {
         entry.baseline = null;
         entry.selectedStatus = null;
         entry.selectedMatchId = null;
@@ -424,6 +518,16 @@ class TeamRuntime {
           : entry.viewMode === "next" ? "No upcoming match" : "No match";
         this.#draw(context, `${label}\n${message}`);
         return;
+      }
+      let match = selectedMatch;
+      if (isLiveMatch(match) && matchClockValue(match.minute) === null && typeof this.#service.loadMatchDetail === "function") {
+        try {
+          const detail = await this.#service.loadMatchDetail(matchIdOf(match), token, competition);
+          if (!this.#isCurrent(context, entry)) return;
+          match = mergeMatchDetail(match, detail);
+        } catch {
+          if (!this.#isCurrent(context, entry)) return;
+        }
       }
       const loadCrest = typeof this.#service.loadCrest === "function"
         ? (url) => url ? this.#service.loadCrest(url).catch(() => null) : Promise.resolve(null)
@@ -485,6 +589,7 @@ module.exports = {
   POLL_INTERVAL_MS,
   TeamRuntime,
   decideMatchSchedule,
+  describeLiveMatch,
   describeScheduledMatch,
   formatLocalKickoffTime,
   formatLocalMatchDate,

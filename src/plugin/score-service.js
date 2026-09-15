@@ -1,5 +1,7 @@
 "use strict";
 
+const { createHash } = require("node:crypto");
+
 // football-data.org boundary. Match retrieval is team-scoped and bounded around
 // the current instant so one request contains both the latest finished fixture and
 // the next scheduled fixture; presentation chooses whichever kickoff is nearest.
@@ -29,6 +31,15 @@ function requireTeamId(teamId) {
   return teamId;
 }
 
+function requireMatchId(matchId) {
+  if (typeof matchId !== "string" || !/^[1-9][0-9]*$/.test(matchId)) {
+    throw new TypeError("match id must be a positive integer string");
+  }
+  const id = Number(matchId);
+  if (!Number.isSafeInteger(id)) throw new TypeError("match id must be a positive integer string");
+  return matchId;
+}
+
 function requireReference(reference) {
   if (!(reference instanceof Date) || Number.isNaN(reference.getTime())) throw new TypeError("reference instant must be a valid Date");
   return reference;
@@ -50,6 +61,10 @@ function crestUrl(team) {
   return typeof team?.crest === "string" && team.crest.length > 0 ? team.crest : null;
 }
 
+function nonNegativeInteger(value) {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : null;
+}
+
 function normalizeMatch(match, competition) {
   if (!match || typeof match !== "object") throw new TypeError("match must be an object");
   const kickoff = typeof match.utcDate === "string" && !Number.isNaN(Date.parse(match.utcDate)) ? match.utcDate : null;
@@ -67,6 +82,8 @@ function normalizeMatch(match, competition) {
     awayScore: match.score?.fullTime?.away ?? null,
     status: match.status ?? null,
     progress: null,
+    minute: nonNegativeInteger(match.minute),
+    injuryTime: nonNegativeInteger(match.injuryTime),
     kickoff,
     date: kickoff?.slice(0, 10) ?? null,
     time: kickoff?.slice(11, 19) ?? null,
@@ -76,6 +93,7 @@ function normalizeMatch(match, competition) {
 class FootballDataScoreProvider {
   #requester;
   #crestPromises = new Map();
+  #matchDetailPromises = new Map();
 
   constructor({ fetch } = {}) {
     if (typeof fetch !== "function") throw new TypeError("fetch must be a function");
@@ -96,6 +114,29 @@ class FootballDataScoreProvider {
     const payload = await this.#request(`/teams/${id}/matches?${query.toString()}`, auth);
     if (!Array.isArray(payload.matches)) throw new TypeError("football-data payload is malformed");
     return payload.matches.map((match) => normalizeMatch(match, code));
+  }
+
+  async loadMatchDetail(matchId, token, competition) {
+    const id = requireMatchId(matchId);
+    const auth = requireToken(token);
+    const code = requireCompetition(competition);
+    const tokenIdentity = createHash("sha256").update(auth).digest("hex");
+    const key = `${id}:${tokenIdentity}`;
+    let pending = this.#matchDetailPromises.get(key);
+    if (!pending) {
+      pending = this.#request(`/matches/${id}`, auth).then(
+        (payload) => {
+          if (this.#matchDetailPromises.get(key) === pending) this.#matchDetailPromises.delete(key);
+          return payload;
+        },
+        (error) => {
+          if (this.#matchDetailPromises.get(key) === pending) this.#matchDetailPromises.delete(key);
+          throw error;
+        },
+      );
+      this.#matchDetailPromises.set(key, pending);
+    }
+    return normalizeMatch(await pending, code);
   }
 
   // Crest URLs are public, but only the provider's dedicated HTTPS host is allowed.
@@ -196,6 +237,12 @@ class ScoreService {
 
   listMatches(teamId, token, competition, reference) {
     return this.#provider.listMatches(teamId, token, competition, reference);
+  }
+
+  loadMatchDetail(matchId, token, competition) {
+    return typeof this.#provider.loadMatchDetail === "function"
+      ? this.#provider.loadMatchDetail(matchId, token, competition)
+      : Promise.resolve(null);
   }
 
   loadCrest(url) {

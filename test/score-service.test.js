@@ -27,3 +27,21 @@ test("ScoreService rejects an incomplete provider", () => {
     listMatches: async () => [], listCompetitions: async () => [], listTeams: async () => [],
   } }));
 });
+
+test("ScoreService exposes optional match detail loading with a safe unavailable result", async () => {
+  const required = {
+    listMatches: async () => [],
+    listCompetitions: async () => [],
+    listTeams: async () => [],
+  };
+  const unavailable = new ScoreService({ provider: required });
+  assert.equal(await unavailable.loadMatchDetail("1", "t", "PD"), null);
+
+  const calls = [];
+  const available = new ScoreService({ provider: {
+    ...required,
+    loadMatchDetail: async (...args) => { calls.push(args); return { id: "1", minute: 12 }; },
+  } });
+  assert.deepEqual(await available.loadMatchDetail("1", "t", "PD"), { id: "1", minute: 12 });
+  assert.deepEqual(calls, [["1", "t", "PD"]]);
+});

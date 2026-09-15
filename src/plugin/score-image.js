@@ -37,8 +37,10 @@ function isEmbeddedImage(value) {
     && /^data:image\/(?:png|jpeg|webp|svg\+xml);base64,[A-Za-z0-9+/=]+$/.test(value);
 }
 
-function countdownFit(line) {
-  return /^START IN \d{2,}:\d{2}$/.test(line) ? ' textLength="168" lengthAdjust="spacingAndGlyphs"' : "";
+function lowerRowFit(line) {
+  const needsFit = /^START IN \d{2,}:\d{2}$/.test(line)
+    || (line.length > 15 && /^(?:1ST HALF|HALF TIME|2ND HALF|EXTRA TIME) \d+(?:\+\d+)?'$/.test(line));
+  return needsFit ? ' textLength="168" lengthAdjust="spacingAndGlyphs"' : "";
 }
 
 function crestMatchBody(lines, { homeCrest, awayCrest }) {
@@ -51,7 +53,7 @@ function crestMatchBody(lines, { homeCrest, awayCrest }) {
   };
   const result = `<text x="98" y="134" fill="#8ee7ff" font-family="Arial, sans-serif" font-size="40" font-weight="700" text-anchor="middle">${escapeXml(lines[2] ?? "-")}</text>`;
   const date = lines[3]
-    ? `<text x="98" y="178" fill="#9aa4b2" font-family="Arial, sans-serif" font-size="19" font-weight="700" text-anchor="middle"${countdownFit(lines[3])}>${escapeXml(lines[3])}</text>`
+    ? `<text x="98" y="178" fill="#9aa4b2" font-family="Arial, sans-serif" font-size="19" font-weight="700" text-anchor="middle"${lowerRowFit(lines[3])}>${escapeXml(lines[3])}</text>`
     : "";
   return `${image(homeCrest, 20)}${image(awayCrest, 128)}${team(lines[0] ?? "Home", 44)}${team(lines[1] ?? "Away", 152)}${result}${date}`;
 }
@@ -64,7 +66,7 @@ function goalMarkers(goalSide) {
     const x = home ? 4 : 150;
     const textX = home ? 25 : 171;
     const label = home ? "Home team goal increase" : "Away team goal increase";
-    return `<g aria-label="${label}"><rect x="${x}" y="106" width="42" height="22" rx="11" fill="#d71920" stroke="#ffffff" stroke-width="1"/><text x="${textX}" y="121" fill="#ffffff" font-family="Arial, sans-serif" font-size="11" font-weight="700" text-anchor="middle">Goal!!</text></g>`;
+    return `<g aria-label="${label}"><rect x="${x}" y="110" width="42" height="22" rx="11" fill="#d71920" stroke="#ffffff" stroke-width="1"/><text x="${textX}" y="125" fill="#ffffff" font-family="Arial, sans-serif" font-size="11" font-weight="700" text-anchor="middle">Goal!!</text></g>`;
   };
   if (goalSide === "both") return `${marker("home")}${marker("away")}`;
   if (goalSide === "home" || goalSide === "away") return marker(goalSide);
@@ -85,7 +87,7 @@ function createScoreImage(text, options = {}) {
     ? crestMatchBody(lines, options)
     : lines.map((line, index) => {
       const { y, fontSize, color } = LINE_LAYOUT[index];
-      return `<text x="${SIZE / 2}" y="${y}" fill="${color}" font-family="Arial, sans-serif" font-size="${fontSize}" font-weight="700" text-anchor="middle"${index === 3 ? countdownFit(line) : ""}>${escapeXml(line)}</text>`;
+      return `<text x="${SIZE / 2}" y="${y}" fill="${color}" font-family="Arial, sans-serif" font-size="${fontSize}" font-weight="700" text-anchor="middle"${index === 3 ? lowerRowFit(line) : ""}>${escapeXml(line)}</text>`;
     }).join("");
   const markers = goalMarkers(options.goalSide);
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="${SIZE}" height="${SIZE}" viewBox="0 0 ${SIZE} ${SIZE}"><rect width="${SIZE}" height="${SIZE}" rx="12" fill="#101820"/>${body}${markers}</svg>`;

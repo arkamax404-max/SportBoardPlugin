@@ -58,6 +58,19 @@ test("createScoreImage bounds the countdown row with defined typography with and
   assert.equal((crests.match(/<image /g) || []).length, 2);
 });
 
+test("createScoreImage bounds long live clock text in the existing lower row", () => {
+  const clock = "EXTRA TIME 103+12'";
+  const generic = decode(createScoreImage(`Home\nAway\n2 - 2\n${clock}`));
+  assert.match(generic, /y="178"[^>]*textLength="168" lengthAdjust="spacingAndGlyphs"[^>]*>EXTRA TIME 103\+12&apos;<\/text>/);
+
+  const crests = decode(createScoreImage(`Home\nAway\n2 - 2\n${clock}`, {
+    homeCrest: "data:image/png;base64,aG9tZQ==",
+    awayCrest: "data:image/png;base64,YXdheQ==",
+  }));
+  assert.match(crests, /y="178"[^>]*textLength="168" lengthAdjust="spacingAndGlyphs"[^>]*>EXTRA TIME 103\+12&apos;<\/text>/);
+  assert.equal((crests.match(/<image /g) || []).length, 2);
+});
+
 test("createScoreImage ignores non-image crest data", () => {
   const svg = decode(createScoreImage("Home\nAway\n0 - 0\n2026-09-14", { homeCrest: "javascript:alert(1)" }));
   assert.doesNotMatch(svg, /<image /);
@@ -84,7 +97,7 @@ test("createScoreImage preserves supplied LIVE text without adding a duplicate b
 test("createScoreImage renders red Goal!! badges on the requested sides", () => {
   const home = decode(createScoreImage("Home\nAway\n9 - 9", { goalSide: "home" }));
   assert.match(home, /aria-label="Home team goal increase"/);
-  assert.match(home, /<rect x="4" y="106" width="42" height="22" rx="11" fill="#d71920" stroke="#ffffff" stroke-width="1"\/>(?:<text[^>]*>Goal!!<\/text>)/);
+  assert.match(home, /<rect x="4" y="110" width="42" height="22" rx="11" fill="#d71920" stroke="#ffffff" stroke-width="1"\/>(?:<text[^>]*y="125"[^>]*>Goal!!<\/text>)/);
   assert.equal((home.match(/>Goal!!<\/text>/g) || []).length, 1);
   assert.doesNotMatch(home, /Away team goal increase/);
   assert.doesNotMatch(home, /<polygon\b/);
@@ -95,7 +108,7 @@ test("createScoreImage renders red Goal!! badges on the requested sides", () => 
     awayCrest: "data:image/png;base64,YXdheQ==",
   }));
   assert.match(awayWithCrests, /aria-label="Away team goal increase"/);
-  assert.match(awayWithCrests, /<rect x="150" y="106" width="42" height="22" rx="11" fill="#d71920" stroke="#ffffff" stroke-width="1"\/>(?:<text[^>]*fill="#ffffff"[^>]*>Goal!!<\/text>)/);
+  assert.match(awayWithCrests, /<rect x="150" y="110" width="42" height="22" rx="11" fill="#d71920" stroke="#ffffff" stroke-width="1"\/>(?:<text[^>]*y="125"[^>]*fill="#ffffff"[^>]*>Goal!!<\/text>)/);
   assert.equal((awayWithCrests.match(/>Goal!!<\/text>/g) || []).length, 1);
   assert.doesNotMatch(awayWithCrests, /Home team goal increase/);
   assert.doesNotMatch(awayWithCrests, /<polygon\b/);
@@ -118,14 +131,19 @@ test("createScoreImage renders red Goal!! badges on the requested sides", () => 
 
 test("createScoreImage keeps goal badges outside the centered single-digit score area", () => {
   const svg = decode(createScoreImage("Home\nAway\n9 - 9\nLIVE", { goalSide: "both", live: true }));
-  const badges = [...svg.matchAll(/<rect x="(4|150)" y="106" width="42" height="22" rx="11" fill="#d71920"/g)]
-    .map((match) => ({ x: Number(match[1]), width: 42 }));
+  const badges = [...svg.matchAll(/<rect x="(4|150)" y="(110)" width="42" height="22" rx="11" fill="#d71920"/g)]
+    .map((match) => ({ x: Number(match[1]), y: Number(match[2]), width: 42, height: 22 }));
   const [homeBadge, awayBadge] = badges;
   const protectedScoreArea = { left: 48, right: 148 };
 
   assert.equal(badges.length, 2);
   assert.ok(homeBadge.x + homeBadge.width < protectedScoreArea.left);
   assert.ok(awayBadge.x > protectedScoreArea.right);
+  for (const badge of badges) {
+    assert.ok(badge.x >= 0 && badge.x + badge.width <= 196);
+    assert.ok(badge.y >= 0 && badge.y + badge.height <= 196);
+  }
+  assert.equal((svg.match(/<text x="(?:25|171)" y="125"[^>]*>Goal!!<\/text>/g) || []).length, 2);
   assert.match(svg, /<text x="98" y="132"[^>]*font-size="40"[^>]*>9 - 9<\/text>/);
   assert.match(svg, /y="178"[^>]*>LIVE<\/text>/);
 });

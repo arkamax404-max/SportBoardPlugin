@@ -9,6 +9,7 @@ const {
   POLL_INTERVAL_MS,
   TeamRuntime,
   decideMatchSchedule,
+  describeLiveMatch,
   describeScheduledMatch,
   formatLocalKickoffTime,
   formatLocalMatchDate,
@@ -26,12 +27,13 @@ const event = (overrides = {}) => ({
   date: "2026-09-14", time: "20:00:00", ...overrides,
 });
 
-function harness({ matches = [event()], now = () => NOW, alert = () => {}, loadCrest, maxTimeout } = {}) {
+function harness({ matches = [event()], now = () => NOW, alert = () => {}, loadCrest, loadMatchDetail, maxTimeout } = {}) {
   const sent = [];
   const calls = [];
   const timers = [];
   const cleared = [];
   const rendered = [];
+  const detailCalls = [];
   const service = {
     listMatches: async (...args) => {
       calls.push(args);
@@ -39,6 +41,10 @@ function harness({ matches = [event()], now = () => NOW, alert = () => {}, loadC
     },
   };
   if (loadCrest) service.loadCrest = loadCrest;
+  if (loadMatchDetail) service.loadMatchDetail = async (...args) => {
+    detailCalls.push(args);
+    return loadMatchDetail(...args);
+  };
   const runtime = new TeamRuntime({
     host: { setBaseDataIcon: (context, data) => sent.push({ context, data }) },
     service,
@@ -49,7 +55,7 @@ function harness({ matches = [event()], now = () => NOW, alert = () => {}, loadC
     clearTimeout: (timer) => cleared.push(timer),
     maxTimeout,
   });
-  return { runtime, sent, calls, timers, cleared, rendered };
+  return { runtime, sent, calls, detailCalls, timers, cleared, rendered };
 }
 
 const settings = (overrides = {}) => ({
@@ -131,7 +137,8 @@ test("renderMatch uses contextual status text for today's match", () => {
   const reference = new Date(2026, 8, 14, 12);
   const cases = [
     { statuses: ["SCHEDULED", "TIMED"], expected: "START IN 08:00" },
-    { statuses: ["IN_PLAY", "PAUSED", "LIVE"], expected: "LIVE" },
+    { statuses: ["IN_PLAY", "LIVE"], expected: "LIVE" },
+    { statuses: ["PAUSED"], expected: "HALF TIME" },
     { statuses: ["FINISHED"], expected: "FINISHED" },
   ];
 
@@ -141,6 +148,49 @@ test("renderMatch uses contextual status text for today's match", () => {
       assert.equal(rendered.split("\n").at(-1), expected, status);
     }
   }
+});
+
+test("describeLiveMatch derives periods and stoppage time from the validated clock", () => {
+  const cases = [
+    { match: { status: "IN_PLAY", minute: 0 }, expected: "1ST HALF 0'" },
+    { match: { status: "LIVE", minute: 1 }, expected: "1ST HALF 1'" },
+    { match: { status: "IN_PLAY", minute: 45, injuryTime: 2 }, expected: "1ST HALF 45+2'" },
+    { match: { status: "PAUSED", minute: 45 }, expected: "HALF TIME 45'" },
+    { match: { status: "PAUSED" }, expected: "HALF TIME" },
+    { match: { status: "IN_PLAY", minute: 46 }, expected: "2ND HALF 46'" },
+    { match: { status: "LIVE", minute: 90, injuryTime: 3 }, expected: "2ND HALF 90+3'" },
+    { match: { status: "IN_PLAY", minute: 91 }, expected: "EXTRA TIME 91'" },
+    { match: { status: "LIVE", minute: 103, injuryTime: 1 }, expected: "EXTRA TIME 103+1'" },
+    { match: { status: "PAUSED", minute: 45, injuryTime: 2 }, expected: "HALF TIME 45+2'" },
+    { match: { status: "IN_PLAY", minute: 34, injuryTime: 0 }, expected: "1ST HALF 34'" },
+  ];
+
+  for (const { match, expected } of cases) {
+    assert.equal(describeLiveMatch(match), expected, JSON.stringify(match));
+  }
+});
+
+test("describeLiveMatch safely handles missing and malformed clocks", () => {
+  for (const minute of [undefined, null, "34", -1, Number.NaN, 34.5]) {
+    assert.equal(describeLiveMatch({ status: "IN_PLAY", minute, injuryTime: 2 }), "LIVE", String(minute));
+    assert.equal(describeLiveMatch({ status: "PAUSED", minute, injuryTime: 2 }), "HALF TIME", String(minute));
+  }
+
+  for (const injuryTime of ["2", -1, Number.NaN, 2.5]) {
+    assert.equal(describeLiveMatch({ status: "LIVE", minute: 45, injuryTime }), "1ST HALF 45'", String(injuryTime));
+  }
+
+  assert.equal(describeLiveMatch({ status: "FINISHED", minute: 90 }), null);
+  assert.equal(describeLiveMatch({ status: "TIMED", minute: 0 }), null);
+});
+
+test("renderMatch places the derived live clock in the existing lower row", () => {
+  const kickoff = new Date(2026, 8, 14, 20).toISOString();
+  const reference = new Date(2026, 8, 14, 12);
+  const rendered = renderMatch(event({ kickoff, status: "IN_PLAY", minute: 67 }), reference);
+
+  assert.equal(rendered.split("\n").length, 4);
+  assert.equal(rendered.split("\n").at(-1), "2ND HALF 67'");
 });
 
 test("renderMatch keeps the host-localized date outside the local match day", () => {
@@ -430,6 +480,213 @@ test("TeamRuntime marks IN_PLAY, PAUSED and LIVE matches as live even when crest
   const finished = harness({ matches: [event({ status: "FINISHED" })] });
   await finished.runtime.refresh(settings());
   assert.equal(finished.rendered.at(-1).options.live, false);
+});
+
+test("TeamRuntime requests detail only for a selected active match with no valid minute", async () => {
+  for (const match of [
+    event({ status: "TIMED", minute: null }),
+    event({ status: "FINISHED", minute: null }),
+    event({ status: "POSTPONED", minute: null }),
+    event({ status: "IN_PLAY", minute: 0 }),
+    event({ status: "PAUSED", minute: 45 }),
+    event({ status: "LIVE", minute: 67 }),
+  ]) {
+    const h = harness({ matches: [match], loadMatchDetail: async () => ({ ...match, minute: 12 }) });
+    await h.runtime.refresh(settings());
+    assert.equal(h.detailCalls.length, 0, `${match.status}:${String(match.minute)}`);
+  }
+
+  const active = event({ id: "42", status: "IN_PLAY", minute: null });
+  const h = harness({ matches: [active], loadMatchDetail: async () => ({ ...active, minute: 12 }) });
+  await h.runtime.refresh(settings());
+  assert.deepEqual(h.detailCalls, [["42", "t", "PD"]]);
+});
+
+test("valid detail replaces LIVE with its clock and score while preserving omitted list fields", async () => {
+  const listMatch = event({
+    id: "42",
+    status: "IN_PLAY",
+    minute: null,
+    homeScore: 1,
+    awayScore: 1,
+    homeCrestUrl: "home-list",
+    awayCrestUrl: "away-list",
+  });
+  const crestLoads = [];
+  const h = harness({
+    matches: [listMatch],
+    loadMatchDetail: async () => ({
+      id: "42",
+      status: "IN_PLAY",
+      minute: 67,
+      injuryTime: 2,
+      homeScore: 2,
+      awayScore: 1,
+      homeTeam: null,
+      homeCrestUrl: null,
+    }),
+    loadCrest: async (url) => { crestLoads.push(url); return `crest:${url}`; },
+  });
+
+  await h.runtime.refresh(settings());
+
+  assert.equal(h.rendered.at(-1).text, "Real Betis\nSevilla FC\n2 - 1\n2ND HALF 67+2'");
+  assert.deepEqual(crestLoads, ["home-list", "away-list"]);
+  assert.equal(h.timers.at(-1).delay, POLL_INTERVAL_MS);
+});
+
+test("unavailable, failed, malformed and mismatched detail keep the list LIVE fallback and polling", async () => {
+  const listMatch = event({ id: "42", status: "IN_PLAY", minute: null, injuryTime: null, homeScore: 1, awayScore: 1 });
+  const cases = [
+    { name: "unavailable" },
+    { name: "failed", loadMatchDetail: async () => { throw new Error("detail failed"); } },
+    { name: "malformed", loadMatchDetail: async () => ({ id: "42", minute: "67", homeScore: 9 }) },
+    { name: "mismatched", loadMatchDetail: async () => ({ ...listMatch, id: "43", minute: 67, homeScore: 9 }) },
+    { name: "unsupported status", loadMatchDetail: async () => ({ ...listMatch, status: "BOGUS", minute: 67, homeScore: 9 }) },
+    { name: "conflicting identity", loadMatchDetail: async () => ({ ...listMatch, homeTeamId: 999, minute: 67, homeScore: 9 }) },
+  ];
+
+  for (const item of cases) {
+    const h = harness({ matches: [listMatch], loadMatchDetail: item.loadMatchDetail });
+    await h.runtime.refresh(settings());
+    assert.equal(h.rendered.at(-1).text.split("\n").at(-1), "LIVE", item.name);
+    assert.match(h.rendered.at(-1).text, /1 - 1/, item.name);
+    assert.doesNotMatch(h.sent.at(-1).data, /Data unavailable/, item.name);
+    assert.equal(h.timers.length, 1, item.name);
+    assert.equal(h.timers[0].delay, POLL_INTERVAL_MS, item.name);
+  }
+});
+
+test("same-ID unsupported status and conflicting teams reject the whole detail", async () => {
+  const listMatch = event({ id: "42", status: "IN_PLAY", minute: null, homeScore: 1, awayScore: 1 });
+  const h = harness({
+    matches: [listMatch],
+    loadMatchDetail: async () => ({
+      ...listMatch,
+      status: "BOGUS",
+      minute: 72,
+      homeTeamId: 559,
+      awayTeamId: 90,
+      homeTeam: "Wrong Home",
+      awayTeam: "Wrong Away",
+      homeScore: 9,
+      awayScore: 8,
+    }),
+  });
+
+  await h.runtime.refresh(settings());
+
+  assert.equal(h.rendered.at(-1).text, "Real Betis\nSevilla FC\n1 - 1\nLIVE");
+  assert.equal(h.rendered.at(-1).options.live, true);
+  assert.equal(h.rendered.at(-1).options.goalSide, null);
+  assert.equal(h.timers.length, 1);
+  assert.equal(h.timers[0].delay, POLL_INTERVAL_MS);
+});
+
+test("active detail transitions remain coherent for PAUSED and FINISHED", async () => {
+  const pausedList = event({ id: "paused", status: "IN_PLAY", minute: null, homeScore: 1, awayScore: 0 });
+  const paused = harness({
+    matches: [pausedList],
+    loadMatchDetail: async () => ({ ...pausedList, status: "PAUSED", minute: 45 }),
+  });
+  await paused.runtime.refresh(settings());
+  assert.equal(paused.rendered.at(-1).text.split("\n").at(-1), "HALF TIME 45'");
+  assert.equal(paused.rendered.at(-1).options.live, true);
+  assert.equal(paused.timers.length, 1);
+  assert.equal(paused.timers[0].delay, POLL_INTERVAL_MS);
+
+  const alerts = [];
+  let detailCall = 0;
+  const finishedList = event({ id: "finished", status: "IN_PLAY", minute: null, homeScore: 1, awayScore: 0 });
+  const finished = harness({
+    matches: [finishedList],
+    loadMatchDetail: async () => {
+      detailCall += 1;
+      return {
+        ...finishedList,
+        status: detailCall === 1 ? "IN_PLAY" : "FINISHED",
+        minute: detailCall === 1 ? 89 : 90,
+        homeScore: detailCall === 1 ? 1 : 2,
+      };
+    },
+    alert: () => alerts.push("play"),
+  });
+  await finished.runtime.refresh(settings());
+  const activeTimer = finished.timers[0];
+  await finished.runtime.refresh(settings());
+  assert.equal(finished.rendered.at(-1).text.split("\n").at(-1), "FINISHED");
+  assert.equal(finished.rendered.at(-1).options.live, false);
+  assert.deepEqual(alerts, []);
+  assert.equal(finished.timers.length, 1, "FINISHED does not schedule a replacement poll");
+  assert.ok(finished.cleared.includes(activeTimer));
+});
+
+test("a stale detail response cannot load crests, draw, alert, alter selection or schedule", async () => {
+  let releaseDetail;
+  const pendingDetail = new Promise((resolve) => { releaseDetail = resolve; });
+  const alerts = [];
+  const crestLoads = [];
+  let listCall = 0;
+  const h = harness({
+    matches: () => {
+      listCall += 1;
+      return listCall === 1
+        ? [event({ id: "live", status: "IN_PLAY", minute: null, homeScore: 0, awayScore: 0 })]
+        : [event({ id: "finished", status: "FINISHED", kickoff: "2026-09-14T17:00:00Z" })];
+    },
+    loadMatchDetail: async () => pendingDetail,
+    loadCrest: async (url) => { crestLoads.push(url); return url; },
+    alert: () => alerts.push("play"),
+  });
+  const stale = h.runtime.refresh(settings());
+  await new Promise((resolve) => setImmediate(resolve));
+  await h.runtime.refresh(settings({ competition: "PL" }), { resetMode: "always" });
+  const current = {
+    sent: h.sent.length,
+    rendered: h.rendered.length,
+    timers: h.timers.length,
+    crestLoads: crestLoads.length,
+  };
+
+  releaseDetail(event({ id: "live", status: "IN_PLAY", minute: 68, homeScore: 9, awayScore: 0 }));
+  await stale;
+
+  assert.deepEqual({
+    sent: h.sent.length,
+    rendered: h.rendered.length,
+    timers: h.timers.length,
+    crestLoads: crestLoads.length,
+  }, current);
+  assert.deepEqual(alerts, []);
+  await h.runtime.toggle({ context: "ctx" });
+  assert.equal(h.sent.at(-1).data, "Betis\nNo upcoming match", "the current selection and mode survived");
+});
+
+test("enriched scores establish a silent baseline and later enriched goals alert correctly", async () => {
+  const alerts = [];
+  let detailCall = 0;
+  const listMatch = event({ id: "42", status: "IN_PLAY", minute: null, homeScore: 0, awayScore: 0 });
+  const h = harness({
+    matches: [listMatch],
+    loadMatchDetail: async () => {
+      detailCall += 1;
+      return event({
+        id: "42",
+        status: "IN_PLAY",
+        minute: 60 + detailCall,
+        homeScore: detailCall === 1 ? 2 : 3,
+        awayScore: 0,
+      });
+    },
+    alert: () => alerts.push("play"),
+  });
+
+  await h.runtime.refresh(settings());
+  assert.equal(h.rendered.at(-1).options.goalSide, null);
+  assert.deepEqual(alerts, []);
+  await h.runtime.refresh(settings());
+  assert.equal(h.rendered.at(-1).options.goalSide, "home");
+  assert.deepEqual(alerts, ["play"]);
 });
 
 test("initial score is silent and later changes alert once, including corrections", async () => {
