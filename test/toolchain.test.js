@@ -543,29 +543,27 @@ rm: (p) => {
   };
 }
 
-test("build stages exactly the runtime files byte-for-byte and drops stale dist entries", async () => {
+test("build stages every runtime file with LF endings, preserves sources, and drops stale dist entries", async () => {
   const { buildDist, EXPECTED_RUNTIME_FILES } = await loadBuild();
-  const sources = {
-"src/action-runtime.js": "action runtime bytes",
-"src/catalog-cache.js": "catalog cache bytes",
-"src/team-runtime.js": "team runtime bytes",
-"src/team-catalog.js": "team catalog bytes",
-"src/host-client.js": "host client bytes",
-"src/main.js": "main bytes",
-"src/score-alert.js": "score alert bytes",
-"src/score-service.js": "score service bytes",
-"src/score-image.js": "score image bytes",
-  };
+  const sourceFor = (eol) => Object.fromEntries(
+    EXPECTED_RUNTIME_FILES.map((name) => [`src/${name}`, `first${eol}second${eol}`]),
+  );
+  const lfSources = sourceFor("\n");
+  const crlfSources = sourceFor("\r\n");
+  const lfTree = memoryTree(lfSources);
   const tree = memoryTree({
-...sources,
+...crlfSources,
 "pkg/dist/stale.js": "stale bytes",
 "pkg/dist/main.js": "outdated bytes",
   });
+  buildDist({ srcDir: "src", distDir: "pkg/dist", fs: lfTree });
   const result = buildDist({ srcDir: "src", distDir: "pkg/dist", fs: tree });
   assert.deepEqual(result.copied, EXPECTED_RUNTIME_FILES);
   assert.deepEqual(tree.listDir("pkg/dist"), EXPECTED_RUNTIME_FILES, "no stale or extra file survives");
   for (const name of EXPECTED_RUNTIME_FILES) {
-assert.ok(tree.readFile(`pkg/dist/${name}`).equals(Buffer.from(sources[`src/${name}`])), name);
+assert.ok(tree.readFile(`pkg/dist/${name}`).equals(Buffer.from("first\nsecond\n")), name);
+assert.ok(tree.readFile(`pkg/dist/${name}`).equals(lfTree.readFile(`pkg/dist/${name}`)), `${name} is checkout-independent`);
+assert.ok(tree.readFile(`src/${name}`).equals(Buffer.from(crlfSources[`src/${name}`])), `${name} source is unchanged`);
   }
   assert.equal(tree.listDir("pkg/dist.staging"), null, "staging is gone after a completed build");
 });
@@ -651,7 +649,44 @@ test("collectEntries yields sorted prefixed names with manifest at the plugin-fo
   assert.ok(names.includes(`${PLUGIN_FOLDER}/manifest.json`), "manifest sits at the plugin-folder root");
   assert.ok(names.includes(`${PLUGIN_FOLDER}/assets/sounds/score-change.wav`), "score alert WAV is packaged");
   const manifest = entries.find((entry) => entry.name === `${PLUGIN_FOLDER}/manifest.json`);
-  assert.ok(manifest.data.equals(Buffer.from("{}\n")), "entry bytes are copied unmodified");
+  assert.ok(manifest.data.equals(Buffer.from("{}\n")), "manifest is normalized to LF");
+});
+
+test("LF and CRLF package trees produce identical normalized entries and archives without changing binary data", async () => {
+  const { collectEntries, createZip, PLUGIN_FOLDER } = await loadPackage();
+  const binary = Buffer.from([0x00, 0x0d, 0x0a, 0xff]);
+  const textFiles = {
+"pkg/manifest.json": "{\n  \"name\": \"fixture\"\n}\n",
+"pkg/dist/action-runtime.js": "const action = true;\n",
+"pkg/dist/team-runtime.js": "const team = true;\n",
+"pkg/libs/LICENSE": "license line one\nlicense line two\n",
+"pkg/libs/assets/u_active.svg": "<svg>\n</svg>\n",
+"pkg/libs/css/uspi.css": "body {\n  color: black;\n}\n",
+"pkg/libs/js/eventEmitter.js": "class Events {\n}\n",
+"pkg/property-inspector/inspector.html": "<main>\n</main>\n",
+  };
+  const withEol = (eol) => ({
+...Object.fromEntries(Object.entries(textFiles).map(([name, data]) => [name, data.replace(/\n/g, eol)])),
+"pkg/assets/plugin.png": binary,
+"pkg/assets/sounds/score-change.wav": binary,
+  });
+  const lfTree = memoryTree(withEol("\n"));
+  const crlfFixture = withEol("\r\n");
+  const crlfTree = memoryTree(crlfFixture);
+  const lfEntries = collectEntries({ pluginDir: "pkg", fs: lfTree });
+  const crlfEntries = collectEntries({ pluginDir: "pkg", fs: crlfTree });
+
+  assert.deepEqual(crlfEntries, lfEntries, "archive inputs are independent of checkout line endings");
+  assert.ok(createZip(crlfEntries).equals(createZip(lfEntries)), "archives are byte-identical");
+  for (const path of Object.keys(textFiles)) {
+const name = `${PLUGIN_FOLDER}/${path.slice("pkg/".length)}`;
+assert.ok(!crlfEntries.find((entry) => entry.name === name).data.includes(Buffer.from("\r")), name);
+assert.ok(crlfTree.readFile(path).equals(Buffer.from(crlfFixture[path])), `${path} source is unchanged`);
+  }
+  for (const path of ["pkg/assets/plugin.png", "pkg/assets/sounds/score-change.wav"]) {
+const name = `${PLUGIN_FOLDER}/${path.slice("pkg/".length)}`;
+assert.ok(crlfEntries.find((entry) => entry.name === name).data.equals(binary), `${path} stays binary`);
+  }
 });
 
 test("collectEntries excludes generated package output directories", async () => {

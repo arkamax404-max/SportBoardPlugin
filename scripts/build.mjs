@@ -1,6 +1,7 @@
 // scripts/build.mjs — deterministic local copy of src/plugin/ into the package
-// folder's dist/. It copies bytes only: no transform, bundle, fetch or asset
-// generation (DA5/D1). Files stage into a temporary sibling of dist/ and the
+// folder's dist/. It normalizes the known JavaScript sources to LF without
+// changing the source tree; there is no bundle, fetch or asset generation
+// (DA5/D1). Files stage into a temporary sibling of dist/ and the
 // staging directory is atomically renamed over dist/, so repeated builds never
 // leave stale runtime files behind and a failed build removes its staging
 // directory while a previously completed dist/ stays untouched. Exported seams
@@ -13,6 +14,10 @@ import { fileURLToPath } from "node:url";
 
 export const PLUGIN_FOLDER = "com.ulanzi.sportboard.ulanziPlugin";
 export const EXPECTED_RUNTIME_FILES = ["action-runtime.js", "catalog-cache.js", "host-client.js", "main.js", "score-alert.js", "score-image.js", "score-service.js", "team-catalog.js", "team-runtime.js"];
+
+function normalizeLf(data) {
+  return Buffer.from(data.toString("utf8").replace(/\r\n?/g, "\n"), "utf8");
+}
 
 function fail(message) {
   throw new Error(`build: ${message}`);
@@ -34,7 +39,7 @@ export function buildDist({ srcDir, distDir, fs }) {
     for (const name of names) {
       const data = fs.readFile(`${srcDir}/${name}`);
       if (data === null) fail(`unreadable source file: ${srcDir}/${name}`);
-      fs.writeFile(`${staging}/${name}`, data);
+      fs.writeFile(`${staging}/${name}`, normalizeLf(data));
     }
     const staged = [...(fs.listDir(staging) ?? [])].sort();
     if (staged.join(",") !== names.join(",")) fail("staged file set does not match the source set");

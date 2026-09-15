@@ -3,8 +3,10 @@
 // No compression, fixed DOS timestamp/date, flags and permissions: two runs
 // over an identical source tree produce byte-identical archives, and no
 // environment-specific absolute path or current timestamp is ever emitted.
-// Exported seams (crc32, collectEntries, createZip, verifyZipLayout) are pure
-// and take injected filesystem adapters, so tests never touch the real tree.
+// Known UTF-8 package text is normalized to LF while binary assets remain
+// byte-for-byte unchanged. Exported seams (crc32, collectEntries, createZip,
+// verifyZipLayout) are pure and take injected filesystem adapters, so tests
+// never touch the real tree.
 // When executed it collects the built package folder, verifies the rooted
 // central directory, then writes <repo>/package/<plugin>.zip via a temporary
 // file and rename — a failing run never replaces a prior ZIP. All paths
@@ -27,6 +29,20 @@ const METHOD_STORE = 0;
 const DOS_TIME = 0;
 const DOS_DATE = 0x0021;
 const EXTERNAL_ATTRS = (0o100644 << 16) >>> 0;
+const TEXT_ENTRY_PATTERNS = [
+  /^manifest\.json$/,
+  /^dist\/[^/]+\.js$/,
+  /^libs\/LICENSE$/,
+  /^libs\/assets\/[^/]+\.svg$/,
+  /^libs\/css\/[^/]+\.css$/,
+  /^libs\/js\/[^/]+\.js$/,
+  /^property-inspector\/[^/]+\.html$/,
+];
+
+function normalizeEntry(path, data) {
+  if (!TEXT_ENTRY_PATTERNS.some((pattern) => pattern.test(path))) return data;
+  return Buffer.from(data.toString("utf8").replace(/\r\n?/g, "\n"), "utf8");
+}
 
 export function crc32(buffer) {
   let crc = 0xffffffff;
@@ -58,7 +74,7 @@ export function collectEntries({ pluginDir, fs }) {
       }
       const data = fs.readFile(`${pluginDir}/${path}`);
       if (data === null) throw new Error(`package: unreadable entry: ${path}`);
-      entries.push({ name: `${PLUGIN_FOLDER}/${path}`, data });
+      entries.push({ name: `${PLUGIN_FOLDER}/${path}`, data: normalizeEntry(path, data) });
     }
   };
   walk("");
