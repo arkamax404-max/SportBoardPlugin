@@ -1,8 +1,9 @@
 {
   "name": "sportboard-plugin",
-  "version": "0.14.0",
+  "version": "0.14.1",
   "private": true,
   "description": "Football match score and fixture keys for the Ulanzi D200",
+  "author": "Santiago Pérez",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -19,6 +20,7 @@
     "check": "node scripts/check.mjs",
     "test": "node --test test/*.test.js",
     "build": "node scripts/build.mjs",
+    "generate:icons": "node scripts/generate-icons.mjs",
     "generate:sound": "node scripts/generate-score-sound.mjs",
     "package": "npm run check && npm test && npm run build && node scripts/package.mjs"
   }

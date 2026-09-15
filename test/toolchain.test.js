@@ -49,7 +49,7 @@ function validScoreSound() {
 
 function baseManifest() {
   return {
-    Author: "SportBoardPlugin Contributors",
+    Author: "Santiago Pérez",
     Name: "Sport Board",
     Description: "Football match scores and fixtures for your Ulanzi D200.",
     Detail:
@@ -58,7 +58,7 @@ function baseManifest() {
     Icon: "assets/plugin.png",
     CategoryIcon: "assets/plugin.png",
     Banner: ["assets/banners/banner.png"],
-    Version: "0.14.0",
+    Version: "0.14.1",
     CodePath: "dist/main.js",
     Type: "JavaScript",
     UUID: PLUGIN_UUID,
@@ -87,12 +87,14 @@ function baseManifest() {
 function basePackageJson(manifest = baseManifest()) {
   return {
     name: "sportboard-plugin",
+    author: "Santiago Pérez",
     private: true,
     version: manifest.Version,
     engines: { node: ">=20" },
     scripts: {
       check: "node scripts/check.mjs",
       test: "node --test test/*.test.js",
+      "generate:icons": "node scripts/generate-icons.mjs",
     },
   };
 }
@@ -107,7 +109,9 @@ function memoryFs(directories, fileHeads) {
   };
 }
 
-function baseFs() {
+async function baseFs() {
+  const { generateIcons } = await import("../scripts/generate-icons.mjs");
+  const icons = generateIcons();
   return memoryFs(
     {
       "": ["manifest.json", "assets"],
@@ -116,7 +120,7 @@ function baseFs() {
       "assets/sounds": [SCORE_SOUND_NAME],
     },
     {
-      ...Object.fromEntries(ASSET_NAMES.map((name) => [`assets/${name}`, PNG_SIGNATURE])),
+      ...Object.fromEntries(ASSET_NAMES.map((name) => [`assets/${name}`, icons.get(`assets/${name}`)])),
       [`assets/banners/${BANNER_NAME}`]: PNG_SIGNATURE,
       [`assets/sounds/${SCORE_SOUND_NAME}`]: validScoreSound(),
     },
@@ -136,14 +140,16 @@ test("package.json and manifest.json must parse", async () => {
 });
 
 test("a fully valid package metadata and manifest yield no defects", async () => {
-  const { validateManifest, validatePackageJson, validateAssets, validatePackageStructure } =
+  const { validateManifest, validatePackageJson, validateAssets, validateGeneratedIcons, validatePackageStructure } =
     await loadCheck();
   const manifest = baseManifest();
+  const fs = await baseFs();
   const defects = [
     ...validatePackageJson(basePackageJson(manifest), manifest),
     ...validateManifest(manifest),
-    ...validateAssets(manifest, baseFs()),
-    ...validatePackageStructure(baseFs()),
+    ...validateAssets(manifest, fs),
+    ...validateGeneratedIcons(fs),
+    ...validatePackageStructure(fs),
   ];
   assert.deepEqual(defects, []);
 });
@@ -186,6 +192,21 @@ test("publication metadata gate pins marketplace text, paths, platforms and mini
     manifest[key] = value;
     assert.deepEqual(rulesOf(validateManifest(manifest)), [rule], key);
   }
+});
+
+test("official author and patch version are pinned exactly", async () => {
+  const { validateManifest, validatePackageJson } = await loadCheck();
+  const wrongAuthor = baseManifest();
+  wrongAuthor.Author = "Santiago Perez";
+  assert.deepEqual(rulesOf(validateManifest(wrongAuthor)), ["manifest.author"]);
+
+  const wrongVersion = baseManifest();
+  wrongVersion.Version = "0.14.0";
+  assert.deepEqual(rulesOf(validateManifest(wrongVersion)), ["manifest.version"]);
+
+  const wrongPackageAuthor = basePackageJson();
+  wrongPackageAuthor.author = "SportBoardPlugin Contributors";
+  assert.deepEqual(rulesOf(validatePackageJson(wrongPackageAuthor, baseManifest())), ["package.author"]);
 });
 
 test("identity gate: plugin UUID shape and extending action UUID", async () => {
@@ -231,11 +252,13 @@ test("package metadata gate: version drift, engines, scripts and dependency sets
   assert.deepEqual(rulesOf(validatePackageJson(withDependency, manifest)), ["package.dependencies"]);
 });
 
-test("release metadata is pinned to version 0.14.0", () => {
+test("release metadata is pinned to version 0.14.1 and the official author", () => {
   const packageJson = JSON.parse(repoRead("package.json"));
   const manifest = JSON.parse(repoRead("com.ulanzi.sportboard.ulanziPlugin/manifest.json"));
-  assert.equal(packageJson.version, "0.14.0");
-  assert.equal(manifest.Version, "0.14.0");
+  assert.equal(packageJson.version, "0.14.1");
+  assert.equal(manifest.Version, "0.14.1");
+  assert.equal(packageJson.author, "Santiago Pérez");
+  assert.equal(manifest.Author, "Santiago Pérez");
 });
 
 test("exactly one D200 keypad action is required", async () => {
@@ -300,19 +323,19 @@ test("asset gate: missing, mis-cased, escaping and non-PNG references fail", asy
 
   const misCased = baseManifest();
   misCased.Actions[0].States[0].Image = "assets/Ready.png";
-  assert.deepEqual(rulesOf(validateAssets(misCased, baseFs())), ["asset.case-mismatch"]);
+  assert.deepEqual(rulesOf(validateAssets(misCased, await baseFs())), ["asset.case-mismatch"]);
 
   const traversal = baseManifest();
   traversal.Icon = "assets/../secrets.png";
-  assert.deepEqual(rulesOf(validateAssets(traversal, baseFs())), ["asset.path-safety"]);
+  assert.deepEqual(rulesOf(validateAssets(traversal, await baseFs())), ["asset.path-safety"]);
 
   const dataUri = baseManifest();
   dataUri.Actions[0].Icon = "data:image/png;base64,AAAA";
-  assert.deepEqual(rulesOf(validateAssets(dataUri, baseFs())), ["asset.path-safety"]);
+  assert.deepEqual(rulesOf(validateAssets(dataUri, await baseFs())), ["asset.path-safety"]);
 
   const svg = baseManifest();
   svg.Actions[0].States[1].Image = "assets/selected.svg";
-  assert.deepEqual(rulesOf(validateAssets(svg, baseFs())), ["asset.png-extension"]);
+  assert.deepEqual(rulesOf(validateAssets(svg, await baseFs())), ["asset.png-extension"]);
 
   const notPng = baseManifest();
   const fakeHeadFs = memoryFs(
@@ -334,9 +357,37 @@ test("asset gate: missing, mis-cased, escaping and non-PNG references fail", asy
   assert.equal(missingBannerDefects[0].path, "assets/banners/banner.png");
 });
 
+test("generated icons are deterministic 196x196 RGBA PNG files with exact committed bytes", async () => {
+  const { ICON_PATHS, ICON_SIZE, generateIcons } = await import("../scripts/generate-icons.mjs");
+  const { validateGeneratedIcons } = await loadCheck();
+  const first = generateIcons();
+  const second = generateIcons();
+  assert.deepEqual([...first.keys()], ICON_PATHS);
+  for (const path of ICON_PATHS) {
+    const bytes = first.get(path);
+    assert.ok(bytes.equals(second.get(path)), path);
+    assert.equal(bytes.readUInt32BE(16), ICON_SIZE, `${path} width`);
+    assert.equal(bytes.readUInt32BE(20), ICON_SIZE, `${path} height`);
+    assert.equal(bytes[24], 8, `${path} bit depth`);
+    assert.equal(bytes[25], 6, `${path} RGBA color type`);
+  }
+  assert.deepEqual(validateGeneratedIcons(await baseFs()), []);
+
+  const drifted = await baseFs();
+  const originalRead = drifted.readBytes;
+  drifted.readBytes = (path, count) => {
+    const bytes = originalRead(path, count);
+    if (path !== "assets/action.png" || bytes === null) return bytes;
+    const changed = Buffer.from(bytes);
+    changed[changed.length - 1] ^= 1;
+    return changed;
+  };
+  assert.deepEqual(rulesOf(validateGeneratedIcons(drifted)), ["asset.icon-drift"]);
+});
+
 test("no property-inspector directory may exist in the package", async () => {
   const { validatePackageStructure } = await loadCheck();
-  assert.deepEqual(rulesOf(validatePackageStructure(baseFs())), []);
+  assert.deepEqual(rulesOf(validatePackageStructure(await baseFs())), []);
 
   const withInspector = memoryFs(
     { "": ["manifest.json", "assets", "property-inspector"], "assets/sounds": [SCORE_SOUND_NAME] },

@@ -8,6 +8,7 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { join, posix } from "node:path";
 import { fileURLToPath } from "node:url";
+import { ICON_SIZE, generateIcons } from "./generate-icons.mjs";
 
 export const PLUGIN_FOLDER = "com.ulanzi.sportboard.ulanziPlugin";
 
@@ -35,6 +36,8 @@ const FORBIDDEN_ACTION_KEYS = ["Banner", "Detail", "MinimumVersion"];
 const EXPECTED_CONTROLLERS = ["Keypad"];
 const EXPECTED_DEVICES = ["D200"];
 const EXPECTED_STATE_NAMES = ["Ready", "Selected"];
+const EXPECTED_AUTHOR = "Santiago Pérez";
+const EXPECTED_VERSION = "0.14.1";
 const EXPECTED_PUBLICATION_METADATA = {
   Description: "Football match scores and fixtures for your Ulanzi D200.",
   Detail:
@@ -51,6 +54,7 @@ const EXPECTED_PUBLICATION_METADATA = {
 const REQUIRED_SCRIPTS = {
   check: "node scripts/check.mjs",
   test: "node --test test/*.test.js",
+  "generate:icons": "node scripts/generate-icons.mjs",
 };
 // build/package land with the toolchain slice; validate their exact command when present.
 const VALIDATED_OPTIONAL_SCRIPTS = {
@@ -114,6 +118,9 @@ export function validatePackageJson(packageJson, manifest) {
       defect("package.json", "package.version-drift", `version must equal manifest.json Version (${manifest.Version})`),
     );
   }
+  if (packageJson.author !== EXPECTED_AUTHOR) {
+    defects.push(defect("package.json", "package.author", `author must be exactly ${EXPECTED_AUTHOR}`));
+  }
   return defects;
 }
 
@@ -146,6 +153,12 @@ export function validateManifest(manifest) {
         ),
       );
     }
+  }
+  if (manifest?.Author !== undefined && manifest.Author !== EXPECTED_AUTHOR) {
+    defects.push(defect("manifest.json", "manifest.author", `Author must be exactly ${EXPECTED_AUTHOR}`));
+  }
+  if (manifest?.Version !== undefined && manifest.Version !== EXPECTED_VERSION) {
+    defects.push(defect("manifest.json", "manifest.version", `Version must be exactly ${EXPECTED_VERSION}`));
   }
   if (manifest?.Type !== undefined && manifest.Type !== "JavaScript") {
     defects.push(defect("manifest.json", "manifest.type", 'Type must be "JavaScript"'));
@@ -236,6 +249,33 @@ export function validateAssets(manifest, fs) {
   const defects = [];
   for (const reference of collectAssetReferences(manifest)) {
     defects.push(...validateReference(reference, fs));
+  }
+  return defects;
+}
+
+export function validateGeneratedIcons(fs) {
+  const defects = [];
+  for (const [path, expected] of generateIcons()) {
+    const actual = fs.readBytes(path, expected.length + 1);
+    if (actual === null) continue; // validateAssets reports missing referenced files.
+    if (!actual.subarray(0, 8).equals(PNG_SIGNATURE)) continue; // validateAssets reports the signature defect.
+    if (actual.length < 33) {
+      defects.push(defect(path, "asset.icon-format", `generated icon must be ${ICON_SIZE}x${ICON_SIZE} 8-bit RGBA PNG`));
+      continue;
+    }
+    const width = actual.readUInt32BE(16);
+    const height = actual.readUInt32BE(20);
+    const bitDepth = actual[24];
+    const colorType = actual[25];
+    if (width !== ICON_SIZE || height !== ICON_SIZE || bitDepth !== 8 || colorType !== 6) {
+      defects.push(
+        defect(path, "asset.icon-format", `generated icon must be ${ICON_SIZE}x${ICON_SIZE} 8-bit RGBA PNG`),
+      );
+      continue;
+    }
+    if (!actual.equals(expected)) {
+      defects.push(defect(path, "asset.icon-drift", "committed icon bytes do not match scripts/generate-icons.mjs"));
+    }
   }
   return defects;
 }
@@ -376,6 +416,7 @@ export function collectDefects({
     defects.push(...validateManifest(manifest));
     const fs = nodeFsAdapter(packageRoot);
     defects.push(...validateAssets(manifest, fs));
+    defects.push(...validateGeneratedIcons(fs));
     defects.push(...validatePackageStructure(fs));
   }
   return defects;
