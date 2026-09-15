@@ -37,7 +37,7 @@ const EXPECTED_CONTROLLERS = ["Keypad"];
 const EXPECTED_DEVICES = ["D200"];
 const EXPECTED_STATE_NAMES = ["Ready", "Selected"];
 const EXPECTED_AUTHOR = "Santiago Pérez";
-const EXPECTED_VERSION = "0.14.3";
+const EXPECTED_VERSION = "0.14.4";
 const EXPECTED_STORE_KEYS = ["cover", "screenshots", "longDescription", "deviceTypes", "tags"];
 const EXPECTED_STORE_PATHS = {
   cover: "assets/cover.png",
@@ -48,7 +48,7 @@ const EXPECTED_STORE_DEVICE_TYPES = ["deck"];
 const EXPECTED_PUBLICATION_METADATA = {
   Description: "Football match scores and fixtures for your Ulanzi D200.",
   Detail:
-    "Sport Board initially displays the football match nearest to the current time for a team assigned to each Ulanzi D200 key. Press the key to switch between the last finished match and the active match, or the next upcoming match when none is active. View home and away crests, team names, kickoff time, score, match date, a LIVE badge, and a brief amber marker beside any side whose score increased. Active matches refresh every two minutes, including across local midnight. Future scheduled and timed fixtures wake locally at the parsed UTC kickoff without early API requests, then refresh every two minutes while status updates lag. Score changes during live play produce a short alert on the computer. A football-data.org API token is required, and competition and fixture availability depends on the account plan.",
+    "Sport Board initially displays the football match nearest to the current time for a team assigned to each Ulanzi D200 key. Press the key to switch between the last finished match and the active match, or the next upcoming match when none is active. View home and away crests, team names, kickoff time, score, match date or a same-day START IN HH:MM countdown, a LIVE badge, and a brief amber marker beside any side whose score increased. Active matches refresh every two minutes, including across local midnight. Future scheduled and timed fixtures update the countdown locally at each displayed minute and across local midnight without API requests before the parsed UTC kickoff. At kickoff, one background refresh starts the two-minute cadence while status updates lag. Score changes during live play produce a short alert on the computer. A football-data.org API token is required, and competition and fixture availability depends on the account plan.",
   Category: "Sports",
   CategoryIcon: "assets/plugin.png",
   Banner: ["assets/banners/banner.png"],

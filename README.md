@@ -8,8 +8,8 @@ An unofficial Ulanzi Studio plugin for the **Ulanzi D200** that displays the foo
 - Dynamic competition and team selectors powered by [football-data.org](https://www.football-data.org/).
 - The match nearest to the current time is selected automatically; no date input is required.
 - Pressing a configured key switches between the last finished match and the active match, or the next upcoming match when none is active.
-- Active matches update every two minutes; future fixtures wake locally at kickoff without early API requests.
-- Home and away crests, team names, score or kickoff time, and match date rendered on the key.
+- Active matches update every two minutes; future fixtures update a local countdown without API requests before kickoff.
+- Home and away crests, team names, score or kickoff time, and a match date or same-day `START IN HH:MM` countdown rendered on the key.
 - A static red `LIVE` badge for matches in play or paused at half-time.
 - A short score-change alert played by the computer, not by the D200.
 - A brief amber marker appears on the home, away, or both sides when that score increases.
@@ -45,7 +45,9 @@ The plugin requests the selected team's fixtures within a bounded window around 
 
 The initial view remains the nearest fixture. Pressing the key then alternates between the most recent `FINISHED` match and the `next` category. `next` prioritizes an active `IN_PLAY`, `PAUSED`, or `LIVE` match; only when none is active does it select the nearest future `SCHEDULED` or `TIMED` fixture. If that side of the toggle has no candidate, the key reports `No finished match` or `No upcoming match`; the next press still switches to the opposite view.
 
-Automatic polling runs every two minutes for an active `IN_PLAY`, `PAUSED`, or `LIVE` match, including across local midnight. A future `SCHEDULED` or `TIMED` fixture does not call the API periodically before kickoff: the plugin arms a local timeout for the parsed UTC kickoff instant. At kickoff it performs one background refresh; if the provider still reports `SCHEDULED` or `TIMED`, polling continues every two minutes until the status changes. Already-due scheduled/timed fixtures enter that cadence immediately. Long waits are split into safe local timeout chunks without API calls between chunks. Finished, cancelled, postponed, suspended, awarded, and other statuses schedule nothing.
+Automatic polling runs every two minutes for an active `IN_PLAY`, `PAUSED`, or `LIVE` match, including across local midnight. For a future `SCHEDULED` or `TIMED` fixture on the same local calendar day, the bottom row shows `START IN HH:MM`, where the value is the remaining duration rounded up to the next minute. The countdown recalculates from the current UTC epoch at every displayed-minute boundary, so delayed callbacks never accumulate drift or show a negative duration. Before the local match day it keeps the localized date and wakes locally at midnight to activate the countdown. These local redraws reuse the displayed fixture and crests and do not call the API, reload crests, alter score/audio state, or show a goal marker.
+
+At the parsed UTC kickoff, the plugin shows `START IN 00:00` and performs exactly one background refresh. If the provider still reports `SCHEDULED` or `TIMED`, polling continues every two minutes until the status changes. Already-due scheduled/timed fixtures enter that cadence immediately. Each context owns only one timer, and long waits are split into safe local timeout chunks without API calls between chunks. Finished, cancelled, postponed, suspended, awarded, and other statuses schedule nothing.
 
 Scheduling compares the parsed kickoff instant and the injected/current clock as epoch milliseconds. Local timezone conversion is used only for display, never for timer decisions.
 

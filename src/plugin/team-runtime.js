@@ -135,6 +135,43 @@ function sameLocalCalendarDate(left, right) {
     && left.getDate() === right.getDate();
 }
 
+function nextLocalMidnight(reference) {
+  return new Date(
+    reference.getFullYear(),
+    reference.getMonth(),
+    reference.getDate() + 1,
+  ).getTime();
+}
+
+/**
+ * @returns {null | { text: string, kickoff: number, nextRedrawAt: number | null }}
+ */
+function describeScheduledMatch(match, reference) {
+  if (!(reference instanceof Date) || Number.isNaN(reference.getTime())) return null;
+  const status = typeof match?.status === "string" ? match.status.toUpperCase() : "";
+  if (!SCHEDULED_STATUSES.has(status)) return null;
+  const kickoff = kickoffTime(match);
+  if (kickoff === null) return null;
+
+  const remaining = kickoff - reference.getTime();
+  if (!sameLocalCalendarDate(new Date(kickoff), reference)) {
+    return {
+      text: formatLocalMatchDate(match),
+      kickoff,
+      nextRedrawAt: remaining > 0 ? Math.min(nextLocalMidnight(reference), kickoff) : null,
+    };
+  }
+
+  const minutes = Math.max(0, Math.ceil(remaining / 60000));
+  const hours = Math.floor(minutes / 60);
+  const minutePart = minutes % 60;
+  return {
+    text: `START IN ${String(hours).padStart(2, "0")}:${String(minutePart).padStart(2, "0")}`,
+    kickoff,
+    nextRedrawAt: remaining > 0 ? kickoff - (minutes - 1) * 60000 : null,
+  };
+}
+
 /** @typedef {{ kind: "none" } | { kind: "wake-at-kickoff", kickoff: number } | { kind: "poll-in-2m", delay: number }} MatchSchedule */
 
 /** @returns {MatchSchedule} */
@@ -186,10 +223,11 @@ function contextualMatchDate(event, reference) {
   if (time === null || !(reference instanceof Date) || Number.isNaN(reference.getTime())) {
     return formatLocalMatchDate(event);
   }
+  const status = typeof event?.status === "string" ? event.status.toUpperCase() : "";
+  const scheduled = describeScheduledMatch(event, reference);
+  if (scheduled !== null) return scheduled.text;
   if (!sameLocalCalendarDate(new Date(time), reference)) return formatLocalMatchDate(event);
 
-  const status = typeof event?.status === "string" ? event.status.toUpperCase() : "";
-  if (status === "SCHEDULED" || status === "TIMED") return "STARTING SOON";
   if (LIVE_STATUSES.has(status)) return "LIVE";
   if (status === "FINISHED") return "FINISHED";
   return formatLocalMatchDate(event);
@@ -212,6 +250,7 @@ class TeamRuntime {
   #now;
   #setTimeout;
   #clearTimeout;
+  #maxTimeout;
   #alert;
   #contexts = new Map();
 
@@ -222,6 +261,7 @@ class TeamRuntime {
     now = () => new Date(),
     setTimeout = globalThis.setTimeout,
     clearTimeout = globalThis.clearTimeout,
+    maxTimeout = MAX_TIMEOUT_MS,
     alert = () => {},
   } = {}) {
     if (!host || typeof host.setBaseDataIcon !== "function") throw new TypeError("host must implement setBaseDataIcon");
@@ -229,12 +269,14 @@ class TeamRuntime {
     if (typeof render !== "function" || typeof now !== "function" || typeof setTimeout !== "function" || typeof clearTimeout !== "function" || typeof alert !== "function") {
       throw new TypeError("render, alert, clock and timers must be functions");
     }
+    if (!Number.isFinite(maxTimeout) || maxTimeout <= 0) throw new TypeError("maxTimeout must be positive");
     this.#host = host;
     this.#service = service;
     this.#render = render;
     this.#now = now;
     this.#setTimeout = setTimeout;
     this.#clearTimeout = clearTimeout;
+    this.#maxTimeout = maxTimeout;
     this.#alert = alert;
   }
 
@@ -303,20 +345,35 @@ class TeamRuntime {
     }, delay);
   }
 
-  #scheduleWake(context, entry, kickoff) {
+  #scheduleLocalRedraw(context, entry, match, crests) {
     if (!this.#isCurrent(context, entry)) return;
     const reference = this.#now();
     const now = reference instanceof Date ? reference.getTime() : Number.NaN;
     if (Number.isNaN(now)) return;
-    const remaining = kickoff - now;
-    if (remaining <= 0) {
+    const display = describeScheduledMatch(match, reference);
+    if (display === null) return;
+    if (display.kickoff <= now) {
+      this.#draw(context, renderMatch(match, reference), { ...crests, live: false, goalSide: null });
       return this.refresh({ context, param: entry.param }, { mode: "background", resetMode: "never" });
     }
+    const target = display.nextRedrawAt;
+    if (target === null) return;
+    const remaining = target - now;
     entry.timer = this.#setTimeout(() => {
       entry.timer = null;
       if (!this.#isCurrent(context, entry)) return undefined;
-      return this.#scheduleWake(context, entry, kickoff);
-    }, Math.min(remaining, MAX_TIMEOUT_MS));
+      const current = this.#now();
+      const currentTime = current instanceof Date ? current.getTime() : Number.NaN;
+      if (Number.isNaN(currentTime)) return undefined;
+      if (currentTime < target) return this.#scheduleLocalRedraw(context, entry, match, crests);
+      const latest = describeScheduledMatch(match, current);
+      if (latest === null) return undefined;
+      this.#draw(context, renderMatch(match, current), { ...crests, live: false, goalSide: null });
+      if (latest.kickoff <= currentTime) {
+        return this.refresh({ context, param: entry.param }, { mode: "background", resetMode: "never" });
+      }
+      return this.#scheduleLocalRedraw(context, entry, match, crests);
+    }, Math.min(remaining, this.#maxTimeout));
   }
 
   #backgroundMatch(matches, entry, teamId) {
@@ -383,7 +440,9 @@ class TeamRuntime {
       if (entry.viewMode !== "last") {
         const schedule = decideMatchSchedule(match, this.#now());
         if (schedule.kind === "poll-in-2m") this.#schedulePoll(context, entry, schedule.delay);
-        else if (schedule.kind === "wake-at-kickoff") this.#scheduleWake(context, entry, schedule.kickoff);
+        else if (schedule.kind === "wake-at-kickoff") {
+          this.#scheduleLocalRedraw(context, entry, match, { homeCrest, awayCrest });
+        }
       }
     } catch {
       if (this.#isCurrent(context, entry)) this.#draw(context, `${label}\nData unavailable`);
@@ -426,6 +485,7 @@ module.exports = {
   POLL_INTERVAL_MS,
   TeamRuntime,
   decideMatchSchedule,
+  describeScheduledMatch,
   formatLocalKickoffTime,
   formatLocalMatchDate,
   isLiveMatch,

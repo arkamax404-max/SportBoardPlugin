@@ -45,6 +45,19 @@ test("createScoreImage renders the generic date line larger and explicitly bold"
   assert.match(svg, /y="178"[^>]*font-size="19"[^>]*font-weight="700"[^>]*>9\/14\/2026<\/text>/);
 });
 
+test("createScoreImage bounds the countdown row with defined typography with and without crests", () => {
+  const countdown = "START IN 23:59";
+  const generic = decode(createScoreImage(`Home\nAway\n20:00\n${countdown}`));
+  assert.match(generic, /x="98" y="178"[^>]*font-family="Arial, sans-serif"[^>]*font-size="19"[^>]*font-weight="700"[^>]*textLength="168" lengthAdjust="spacingAndGlyphs"[^>]*>START IN 23:59<\/text>/);
+
+  const crests = decode(createScoreImage(`Home\nAway\n20:00\n${countdown}`, {
+    homeCrest: "data:image/png;base64,aG9tZQ==",
+    awayCrest: "data:image/png;base64,YXdheQ==",
+  }));
+  assert.match(crests, /x="98" y="178"[^>]*font-family="Arial, sans-serif"[^>]*font-size="19"[^>]*font-weight="700"[^>]*textLength="168" lengthAdjust="spacingAndGlyphs"[^>]*>START IN 23:59<\/text>/);
+  assert.equal((crests.match(/<image /g) || []).length, 2);
+});
+
 test("createScoreImage ignores non-image crest data", () => {
   const svg = decode(createScoreImage("Home\nAway\n0 - 0\n2026-09-14", { homeCrest: "javascript:alert(1)" }));
   assert.doesNotMatch(svg, /<image /);

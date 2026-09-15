@@ -9,6 +9,7 @@ const {
   POLL_INTERVAL_MS,
   TeamRuntime,
   decideMatchSchedule,
+  describeScheduledMatch,
   formatLocalKickoffTime,
   formatLocalMatchDate,
   renderMatch,
@@ -25,7 +26,7 @@ const event = (overrides = {}) => ({
   date: "2026-09-14", time: "20:00:00", ...overrides,
 });
 
-function harness({ matches = [event()], now = () => NOW, alert = () => {} } = {}) {
+function harness({ matches = [event()], now = () => NOW, alert = () => {}, loadCrest, maxTimeout } = {}) {
   const sent = [];
   const calls = [];
   const timers = [];
@@ -37,6 +38,7 @@ function harness({ matches = [event()], now = () => NOW, alert = () => {} } = {}
       return typeof matches === "function" ? matches(calls.length) : matches;
     },
   };
+  if (loadCrest) service.loadCrest = loadCrest;
   const runtime = new TeamRuntime({
     host: { setBaseDataIcon: (context, data) => sent.push({ context, data }) },
     service,
@@ -45,6 +47,7 @@ function harness({ matches = [event()], now = () => NOW, alert = () => {} } = {}
     now,
     setTimeout: (callback, delay) => { const timer = { callback, delay }; timers.push(timer); return timer; },
     clearTimeout: (timer) => cleared.push(timer),
+    maxTimeout,
   });
   return { runtime, sent, calls, timers, cleared, rendered };
 }
@@ -109,11 +112,25 @@ test("formatLocalKickoffTime converts a known UTC instant in an isolated timezon
   assert.equal(output, "16:07");
 });
 
+test("scheduled countdown rounds remaining minutes up and reaches zero at kickoff", () => {
+  const reference = new Date(2026, 8, 14, 12);
+  const cases = [
+    { remaining: 2 * 60 * 60 * 1000 + 34 * 60 * 1000 + 10000, expected: "START IN 02:35" },
+    { remaining: 1, expected: "START IN 00:01" },
+    { remaining: 0, expected: "START IN 00:00" },
+    { remaining: -1, expected: "START IN 00:00" },
+  ];
+  for (const { remaining, expected } of cases) {
+    const match = event({ status: "TIMED", kickoff: new Date(reference.getTime() + remaining).toISOString() });
+    assert.equal(describeScheduledMatch(match, reference).text, expected);
+  }
+});
+
 test("renderMatch uses contextual status text for today's match", () => {
   const kickoff = new Date(2026, 8, 14, 20).toISOString();
   const reference = new Date(2026, 8, 14, 12);
   const cases = [
-    { statuses: ["SCHEDULED", "TIMED"], expected: "STARTING SOON" },
+    { statuses: ["SCHEDULED", "TIMED"], expected: "START IN 08:00" },
     { statuses: ["IN_PLAY", "PAUSED", "LIVE"], expected: "LIVE" },
     { statuses: ["FINISHED"], expected: "FINISHED" },
   ];
@@ -141,10 +158,12 @@ test("renderMatch derives calendar-day equality from the kickoff instant in the 
     localKickoff.getFullYear(),
     localKickoff.getMonth(),
     localKickoff.getDate(),
-    12,
+    0,
   );
 
-  assert.equal(renderMatch(event({ kickoff, status: "TIMED" }), sameLocalDay).split("\n").at(-1), "STARTING SOON");
+  const remainingMinutes = Math.ceil((Date.parse(kickoff) - sameLocalDay.getTime()) / 60000);
+  const expected = `START IN ${String(Math.floor(remainingMinutes / 60)).padStart(2, "0")}:${String(remainingMinutes % 60).padStart(2, "0")}`;
+  assert.equal(renderMatch(event({ kickoff, status: "TIMED" }), sameLocalDay).split("\n").at(-1), expected);
 });
 
 test("renderMatch keeps the localized date for anomalous statuses", () => {
@@ -180,7 +199,7 @@ test("TeamRuntime.refresh passes its injected reference clock to match rendering
 
   await h.runtime.refresh(settings());
 
-  assert.equal(h.rendered.at(-1).text.split("\n").at(-1), "STARTING SOON");
+  assert.equal(h.rendered.at(-1).text.split("\n").at(-1), "START IN 08:00");
   assert.strictEqual(h.calls.at(-1).at(-1), reference);
 });
 
@@ -553,9 +572,85 @@ test("an active match polls once after exactly two minutes", async () => {
   assert.equal(h.timers.length, 2, "the completed poll schedules one next one-shot timer");
 });
 
+test("a local countdown tick redraws captured data without API, crest, audio or baseline work", async () => {
+  let nowMs = new Date(2026, 8, 14, 12).getTime();
+  const kickoffMs = nowMs + 2 * 60000 + 1000;
+  const crestLoads = [];
+  const alerts = [];
+  const scheduled = event({
+    status: "TIMED",
+    kickoff: new Date(kickoffMs).toISOString(),
+    homeScore: 0,
+    awayScore: 0,
+    homeCrestUrl: "home",
+    awayCrestUrl: "away",
+  });
+  const live = event({ ...scheduled, status: "LIVE", homeScore: 1, awayScore: 0 });
+  const h = harness({
+    matches: (call) => [call === 1 ? scheduled : live],
+    now: () => new Date(nowMs),
+    alert: () => alerts.push("play"),
+    loadCrest: async (url) => { crestLoads.push(url); return `crest:${url}`; },
+  });
+  await h.runtime.refresh(settings());
+  assert.match(h.rendered.at(-1).text, /START IN 00:03$/);
+
+  nowMs += 1000;
+  await h.timers[0].callback();
+  assert.match(h.rendered.at(-1).text, /START IN 00:02$/);
+  assert.equal(h.calls.length, 1);
+  assert.deepEqual(crestLoads, ["home", "away"]);
+  assert.deepEqual(alerts, []);
+  assert.deepEqual(h.rendered.at(-1).options, {
+    homeCrest: "crest:home",
+    awayCrest: "crest:away",
+    live: false,
+    goalSide: null,
+  });
+
+  nowMs = kickoffMs;
+  await h.timers[1].callback();
+  assert.equal(h.calls.length, 2);
+  assert.deepEqual(alerts, ["play"], "the local tick did not replace the score baseline");
+});
+
+test("a local countdown redraw removes an ephemeral goal marker", async () => {
+  let nowMs = new Date(2026, 8, 14, 12).getTime();
+  const kickoffMs = nowMs + 2 * 60000 + 1000;
+  const sequence = [
+    event({ status: "TIMED", kickoff: new Date(kickoffMs).toISOString(), homeScore: 0, awayScore: 0 }),
+    event({ status: "TIMED", kickoff: new Date(kickoffMs).toISOString(), homeScore: 1, awayScore: 0 }),
+  ];
+  const h = harness({ matches: (call) => [sequence[Math.min(call - 1, 1)]], now: () => new Date(nowMs) });
+  await h.runtime.refresh(settings());
+  await h.runtime.refresh(settings());
+  assert.equal(h.rendered.at(-1).options.goalSide, "home");
+
+  nowMs += 1000;
+  await h.timers.at(-1).callback();
+  assert.equal(h.rendered.at(-1).options.goalSide, null);
+  assert.equal(h.rendered.at(-1).options.live, false);
+  assert.equal(h.calls.length, 2);
+});
+
+test("local midnight activates the countdown without an API request", async () => {
+  let nowMs = new Date(2026, 8, 14, 23, 59, 50).getTime();
+  const kickoff = new Date(2026, 8, 15, 0, 10);
+  const match = event({ status: "TIMED", kickoff: kickoff.toISOString(), homeScore: null, awayScore: null });
+  const h = harness({ matches: [match], now: () => new Date(nowMs) });
+  await h.runtime.refresh(settings());
+  assert.equal(h.rendered.at(-1).text.split("\n").at(-1), kickoff.toLocaleDateString());
+  assert.equal(h.timers[0].delay, 10000);
+
+  nowMs = new Date(2026, 8, 15).getTime();
+  await h.timers[0].callback();
+  assert.equal(h.calls.length, 1);
+  assert.equal(h.rendered.at(-1).text.split("\n").at(-1), "START IN 00:10");
+});
+
 test("a future scheduled match wakes exactly at kickoff without an earlier API call", async () => {
   let reference = new Date(NOW);
-  const kickoff = new Date(NOW.getTime() + 10 * 60 * 1000);
+  const kickoff = new Date(NOW.getTime() + 1000);
   const h = harness({
     matches: [event({ status: "TIMED", kickoff: kickoff.toISOString(), homeScore: null, awayScore: null })],
     now: () => new Date(reference),
@@ -616,7 +711,7 @@ test("background discards a finished retained match and wakes for the next futur
   assert.match(h.sent.at(-1).data, /Future/);
   assert.equal(h.rendered.at(-1).options.goalSide, null);
   assert.deepEqual(alerts, []);
-  assert.equal(h.timers[1].delay, nextKickoff.getTime() - kickoff.getTime());
+  assert.equal(h.timers[1].delay, 60000, "the next countdown minute owns the single timer");
 });
 
 test("invalid or foreign retained matches fall back to the bounded next message without a timer", async () => {
@@ -810,28 +905,26 @@ test("IN_PLAY, PAUSED and LIVE poll regardless of the local calendar day", async
   }
 });
 
-test("a kickoff beyond Node's safe timeout is reached in local chunks without API calls between them", async () => {
-  let nowMs = NOW.getTime();
-  const kickoffMs = nowMs + MAX_TIMEOUT_MS + 5000;
+test("a local wake target beyond the timeout cap is chunked without API calls", async () => {
+  let nowMs = new Date(2026, 8, 14, 12).getTime();
+  const kickoffMs = new Date(2026, 8, 15, 12).getTime();
+  const timeoutCap = 5000;
   const match = event({ status: "TIMED", kickoff: new Date(kickoffMs).toISOString(), homeScore: null, awayScore: null });
-  const h = harness({ matches: [match], now: () => new Date(nowMs) });
+  const h = harness({ matches: [match], now: () => new Date(nowMs), maxTimeout: timeoutCap });
   await h.runtime.refresh(settings());
   assert.equal(h.calls.length, 1);
-  assert.equal(h.timers[0].delay, MAX_TIMEOUT_MS);
+  assert.equal(MAX_TIMEOUT_MS, 0x7fffffff);
+  assert.equal(h.timers[0].delay, timeoutCap);
 
-  nowMs += MAX_TIMEOUT_MS;
+  nowMs += timeoutCap;
   await h.timers[0].callback();
   assert.equal(h.calls.length, 1, "safe chunk rearming stays local");
-  assert.equal(h.timers[1].delay, 5000);
-
-  nowMs = kickoffMs;
-  await h.timers[1].callback();
-  assert.equal(h.calls.length, 2, "only the final kickoff boundary calls the provider");
-  assert.equal(h.timers[2].delay, POLL_INTERVAL_MS);
+  assert.equal(h.timers[1].delay, timeoutCap);
+  assert.equal(h.rendered.length, 2, "timeout chunks do not redraw before the display boundary");
 });
 
-test("mode, selection, clear and dispose invalidate an armed kickoff wakeup", async () => {
-  const kickoff = new Date(NOW.getTime() + 60000).toISOString();
+test("mode, settings, selection, clear and dispose invalidate stale local wakeups", async () => {
+  const kickoff = new Date(NOW.getTime() + 121000).toISOString();
   const future = event({ id: "future", status: "TIMED", kickoff, homeScore: null, awayScore: null });
   const finished = event({ id: "last", status: "FINISHED", kickoff: "2026-09-14T17:00:00Z" });
 
@@ -843,6 +936,15 @@ test("mode, selection, clear and dispose invalidate an armed kickoff wakeup", as
   await modeWake.callback();
   assert.equal(mode.calls.length, modeCalls);
   assert.ok(mode.cleared.includes(modeWake));
+
+  const reset = harness({ matches: [future] });
+  await reset.runtime.refresh(settings());
+  const resetWake = reset.timers[0];
+  await reset.runtime.refresh(settings(), { resetMode: "always" });
+  const resetState = { calls: reset.calls.length, rendered: reset.rendered.length, timers: reset.timers.length };
+  await resetWake.callback();
+  assert.deepEqual({ calls: reset.calls.length, rendered: reset.rendered.length, timers: reset.timers.length }, resetState);
+  assert.ok(reset.cleared.includes(resetWake));
 
   const selection = harness({ matches: [future] });
   await selection.runtime.refresh(settings());
@@ -877,6 +979,7 @@ test("a late wakeup after computer suspension refreshes once and resumes polling
   nowMs = kickoffMs + 60 * 60 * 1000;
   await wake.callback();
   assert.equal(h.calls.length, 2, "a delayed callback performs one provider request");
+  assert.equal(h.rendered.at(-2).text.split("\n").at(-1), "START IN 00:00", "the late local redraw clamps at zero");
   assert.equal(h.timers.length, 2);
   assert.equal(h.timers[1].delay, POLL_INTERVAL_MS);
 });

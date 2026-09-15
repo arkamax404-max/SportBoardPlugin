@@ -45,6 +45,10 @@ function isEmbeddedImage(value) {
     && /^data:image\/(?:png|jpeg|webp|svg\+xml);base64,[A-Za-z0-9+/=]+$/.test(value);
 }
 
+function countdownFit(line) {
+  return /^START IN \d{2,}:\d{2}$/.test(line) ? ' textLength="168" lengthAdjust="spacingAndGlyphs"' : "";
+}
+
 function crestMatchBody(lines, { homeCrest, awayCrest }) {
   const image = (data, x) => isEmbeddedImage(data)
     ? `<image x="${x}" y="12" width="48" height="48" preserveAspectRatio="xMidYMid meet" href="${escapeXml(data)}"/>`
@@ -55,7 +59,7 @@ function crestMatchBody(lines, { homeCrest, awayCrest }) {
   };
   const result = `<text x="98" y="134" fill="#8ee7ff" font-family="Arial, sans-serif" font-size="40" font-weight="700" text-anchor="middle">${escapeXml(lines[2] ?? "-")}</text>`;
   const date = lines[3]
-    ? `<text x="98" y="178" fill="#9aa4b2" font-family="Arial, sans-serif" font-size="19" font-weight="700" text-anchor="middle">${escapeXml(lines[3])}</text>`
+    ? `<text x="98" y="178" fill="#9aa4b2" font-family="Arial, sans-serif" font-size="19" font-weight="700" text-anchor="middle"${countdownFit(lines[3])}>${escapeXml(lines[3])}</text>`
     : "";
   return `${image(homeCrest, 20)}${image(awayCrest, 128)}${team(lines[0] ?? "Home", 44)}${team(lines[1] ?? "Away", 152)}${result}${date}`;
 }
@@ -93,7 +97,7 @@ function createScoreImage(text, options = {}) {
     ? crestMatchBody(lines, options)
     : lines.map((line, index) => {
       const { y, fontSize, color } = layout[index];
-      return `<text x="${SIZE / 2}" y="${y}" fill="${color}" font-family="Arial, sans-serif" font-size="${fontSize}" font-weight="700" text-anchor="middle">${escapeXml(line)}</text>`;
+      return `<text x="${SIZE / 2}" y="${y}" fill="${color}" font-family="Arial, sans-serif" font-size="${fontSize}" font-weight="700" text-anchor="middle"${index === 3 ? countdownFit(line) : ""}>${escapeXml(line)}</text>`;
     }).join("");
   const badge = options.live === true ? liveBadge() : "";
   const markers = goalMarkers(options.goalSide);
